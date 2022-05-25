@@ -1,0 +1,22 @@
+\section{Data collection \& analysis}
+The data collected for this study took the form of research papers; we only searched for papers electronically,
+We primarily analyzed the `introduction', `background', and `related work' sections of research papers to find other papers, and we also looked through the list of referenced research, in a recursive fashion.
+Furthermore, we used online tools such as Google Scholar\footnote{\url{https://scholar.google.com/}} and Semantic Scholar\footnote{\url{https://www.semanticscholar.org/}} and their `related papers' function to identify potentially interesting research.
+
+For all `interesting' papers, we read through the abstract and conclusion as a first way to filter research.
+If a paper is not useful for this study, we discard it; otherwise, we read it in more detail.
+
+During the detailed reading, we manually categories each paper as specified in \autoref{sec:design}.
+We keep track of the corpus in an Org Mode \autocite{orgmode} file in GNU Emacs;\footnote{\url{https://www.gnu.org/software/emacs/}} every research paper is a separate heading.
+We record categories using the \textit{properties} feature of Org Mode, and we record the tier of the conference at which a paper was published using the \textit{priority} feature.\todo{How are the tiers defined? Add a reference!}
+
+To prepare the data for numeric analysis, we first extract the categories from the Org file using the Property, Mapping, and Element APIs \autocite{orgmode} provided by Org Mode.
+We write this extracted data to a JSON file using the \texttt{json-encode} function in Emacs Lisp.
+This data must still be converted to a columnar format before it can be analyzed; moreover, it is preferable to convert some categories into a wide format with boolean values, while leaving other categories of data as-is.
+We do this reformatting using a Ruby\footnote{\url{https://www.ruby-lang.org/en/}} script, saving the result as a tab-separated file.
+We then load the TSV into a data frame in the R language\footnote{\url{https://www.r-project.org/}}.
+We use R to calculate statistics about the data, generate LaTeX tables with the \texttt{xtable} package\footnote{\url{https://r-forge.r-project.org/projects/xtable/}}, and generate graphical plots using the \texttt{ggplot2} package.\footnote{\url{https://ggplot2.tidyverse.org/}}
+
+For reproducability of research\todo{why is that good?}, we include all code (for extracting, pre-processing, and analyzing data) in the same Org file.
+Scripts are stored as code blocks in Org Mode, which can be extracted into separate files or executed directly with Babel \autocite{orgmode}.
+We include all tables and numbers that we generate in our analysis directly in this document with the \verb|\include{}| and \verb|\input{}| LaTeX commands, precluding typing errors.
