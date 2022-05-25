@@ -1,0 +1,233 @@
+\section{Overview of literature}\label{s:overview of literature}
+In this section, we give a summary of the literature relevant to this study.
+
+\subsection{Large-scale studies of NLB firmware}
+In total, we look at \result{non-linux-and-both-num-large-scale} large-scale studies, separated by whether they only analyze NLB firmware, or both LB and NLB firmware.
+All large-scale NLB firmware studies used a static approach, with only \citen{HEAPSTER}{gritti2022heapster} also incorporating symbolic execution.
+
+\subsubsection{Both LB and NLB firmware}
+One way to analyze firmware is to look at sharing of code and/or data.
+\citea{costin2014large} investigate shared data among firmware, particularly credentials and certificates.
+They scrape the first public large-scale analysis of both LB and NLB firmware images, retrieving data from vendor websites, FTP servers, and mirror sites using a custom crawler.
+They also collected data via custom search engines and user submissions of firmware.
+The dataset contains \num{32356} firmware images spanning the personal, IoT, and industrial sectors.
+Then, the authors look for password hashes and attempt to crack them via dictionary and brute-force attacks.
+They also develop a correlation engine to find similarities between firmware images, such as common credentials and certificates, helping to identify shared security issues across different images.
+The authors discover \num{38} previously unknown vulnerabilities in \num{693} of the images; by correlating similar files stored in the images, they extend these findings to over \num{123} different products.
+
+Another option is to search the code of unknown firmware for instances of known vulnerable patterns.
+In \citet{Scalable graph-based bug search}{feng2016scalable}, the authors search for functions similar to query functions known to introduce a CVE.
+Their search engine, Genius, then uses these vectors to find functions similar to a query function.
+They encode \term{CFG}s as numeric feature vectors, based on properties of functions.
+The authors observe that this engine can finish a search across \num{8126} firmware images, scraped from vendor websites, within an average of one second.
+Furthermore, only in the top \num{50} candidates, it found \num{38} potentially vulnerable firmware images; the authors confirmed \num{23} of them by manual analysis.
+
+Instead of searching for individual vulnerable elements, one could build a database of such elements, and then check if parts of unknown firmware appear in that database.
+The authors of \citen{BINARM}{shirani2018binarm} build a database of vulnerable functions for firmware targeting intelligent electronic devices: because vendors are obligated to publish licenses of open source software that they use, it's possible to determine which open source projects are used in the firmware, and those projects can be correlated with the CVE database to find vulnerabilities in the firmware.
+Then, they create an engine to check if a given query function is in this database, and hence check if it's vulnerable.
+Their results show that the average accuracy in identifying vulnerable functions is 0.92, and their detection engine can speed up existing approaches by 3 orders of magnitude.
+In their evaluation on \num{5756} firmware images (obtained with a website scraper from vendor websites and FTP servers), their prototype detects \num{93} real CVE vulnerabilities.
+
+This is also possible at a higher level; i.e., instead of looking for vulnerable functions, one can consider the third-party components (\newterm{TPC}s) as a whole.
+In \citen{FirmSec}{zhao2022largescale}, the authors create a database containing versions of \term{TPC}s (such as BusyBox or OpenSSL) and their related CVEs.
+They collect images with a web crawler that retrieves data from vendor websites, FTP websites, the community (forums and GitHub repositories), and a private firmware repository of a smart home company (\qq{TSmart}).
+In analysis, their system matches code features of firmware against those extracted from TPCs to identify which TPCs are present in the firmware, and then queries the database to find whether any of them introduces a CVE.
+If any of those TPCs are known to have vulnerabilities, the firmware itself is also vulnerable.
+They use this system to conduct the first large-scale analysis of the usage of TPCs in firmware, and detect \num{584} of them in a dataset of \num{32817} images, identifying \num{128757} vulnerabilities in total.
+
+\subsubsection{Only NLB firmware}
+As part of the first large-scale study focusing \textit{solely} on NLB firmware, \citen{FirmXRay}{wen2020firmxray} looks at Bluetooth Low-Energy vulnerabilities caused by configuration at the link layer.
+To load the firmware, they resolve its base address by relating memory pointers to their targets, and choosing the offset with the most pointers with valid targets.
+They use knowledge from the vendors' software development kits (\newterm{SDK}s) to identify some of these pointers, and then to resolve configuration values.
+It is then possible to determine if the obtained configuration values lead to vulnerabilities, such as identity tracking due to a static MAC address, or active MITM vulnerability due to \textit{Just Works} pairing.
+In a dataset of \num{793} images extracted from mobile apps downloaded from Google Play, they found that 98.1\% of devices have a random static MAC address, 71.5\% \textit{Just Works} pairing, and 98.5\% use insecure key exchanges.
+
+Issues in firmware images may not only surface in configuration, but also in the lower-level software components, such as heap memory management libraries.
+\citen{HEAPSTER}{gritti2022heapster} automatically identifies the heap memory allocation library used by a monolithic firmware image, and tests its security with symbolic execution and bounded model checking.
+To properly load the image into an emulator, they use the same base address extraction technique as \citen{FirmXRay}{wen2020firmxray}.
+They identify allocation and de-allocation functions by locating the sources of pointers passed to functions such as \texttt{memcpy}, and checking the values returned when those sources are executed.
+Using \citen{HeapHopper}{eckert2018heaphopper}, they generate a proof-of-vulnerability for any vulnerable allocator or de-allocator.
+In a large-scale evaluation on real-world samples, the authors reused an existing dataset from \citen{FirmXRay}{wen2020firmxray}, adding 5 firmware samples downloaded from Fitbit.
+In this dataset of \num{804} images, they identified eleven heap management library families with \num{48} variations, all of them vulnerable to at least one critical heap vulnerability.
+
+
+\subsection{Small-scale studies of NLB firmware}
+We also include small-scale NLB firmware research in our corpus.
+
+\subsubsection{Both LB and NLB firmware}
+Small-scale studies of NLB firmware are split approximately equally between static and dynamic analyses.
+
+\paragraph{Static approaches}
+Code search analyses have also been used at a smaller scale; for example, one way to efficiently recognize code is by creating a \q{signature} based on features of the code.
+In \citet{Cross-Architecture Bug Search}{pewny2015crossarchitecture}, the authors calculate signatures for known bugs, which are derived from input and output variables of basic blocks.
+They then search for these signatures in a dataset of \num{60} binaries extracted from vendor-compiled router firmware, targeting MIPS and ARM.
+Due to their use of an \term{IR}, their prototype can find Heartbleed bugs~\cite{heartbleed} regardless of the underlying instructions set, and also found backdoors in closed-source MIPS and ARM firmware.
+
+Similarly, \citen{discovRE}{eschweiler2016discovre} also searches for bugs, but with a somewhat different approach: starting with a vulnerable binary function, the system identifies similar functions in other binaries.
+To determine similarity, they use properties of functions as features, and pass these features through two filters to narrow down candidates.
+They evaluate their prototype on an existing dataset compiled by \citea{pewny2015crossarchitecture} and two additional firmware images (in total, \num{62} samples).
+Their prototype could identify Heartbleed~\cite{heartbleed} and POODLE~\cite{poodle} vulnerabilities much faster than the state-of-the-art approaches at the time.
+
+Some vulnerabilities are triggered by user input, so \citen{Karonte}{redini2020karonte} analyzes data flow in firmware to find insecure flows of attacker data.
+The system applies various heuristics to find \q{border binaries} (binaries that interact with the outside world), builds a graph of data flow between binaries in the image, and then uses static taint analysis to track data propagation in the graph.
+If \textsc{Karonte} finds an insecure flow of attacker-controlled data (such as possible memory corruption or attacker-controlled loops), it reports the issue for inspection.
+On a dataset of \num{53} firmware samples scraped from official vendor websites, \textsc{Karonte} produced \num{87} alerts, out of which \num{51} were true positives (including \num{46} new zero-day bugs).
+
+\paragraph{Dynamic approaches \& symbolic execution}
+\citen{Firmalice}{shoshitaishvili2015firmalice} also analyzes data flow, but in a more hybrid way than \citen{Karonte}{redini2020karonte}, using symbolic execution to determine if program can reach a pre-defined privileged point.
+To find the base address, \textsc{Firmalice} uses jump tables: lists of absolute code addresses stored in the device's memory.
+In parts of the program ranging between a privileged point and an entry point, \textsc{Firmalice} tries to identify user inputs which reach the privileged program point, using symbolic execution and constraint solving to find such an input.
+The authors were able to detect authentication bypass backdoors in two out of three commercial device firmware.
+
+A challenge for the analysis of \term{NLB} firmware is a lack of feedback: even if there is a problem, embedded devices may not make these effects as visible, due to their more streamlined design.
+In fact, \citea{muench2018what} show in their paper that memory corruptions on embedded devices often have effects that are less visible compared to desktop systems, reducing the effectiveness of dynamic testing techniques, particularly fuzzing.
+Since their aim is not to find vulnerabilities but to analyze their effects on embedded systems, they themselves introduce several memory corruption vulnerabilities (but not handling of those vulnerabilities) into the code.
+They look at a total of three devices, one for each of the device classes they define (Type-I, Type-II, and Type-III), as discussed in \autoref{ssec:previous classification efforts}.
+They find that the fewer features an embedded system has, the less likely it is to detect memory corruptions, with \qq{Type-III systems} (those without an OS abstraction) either hanging or not showing a visible effect.
+
+\subsubsection{Only NLB firmware}
+There has also been focus on small-scale analysis only of NLB firmware; some of this research is scoped to only one or two specific devices, such as a keyboard or mouse.
+In this section, we summarize only small-scale NLB research that analyzes a larger number of samples (though not enough to be considered large-scale), because such research is closest in scope to our literature study.
+
+\paragraph{Static approaches}
+Some focus has been on improving the techniques prerequisite for, or related to, firmware analysis; this is particularly important for NLB firmware, considering the lack of standards.
+Before analysis, the firmware must be disassembled starting from its base address, and \citea{zhu2017methodology} describe a method to automatically find the image base of firmware, with a focus on industrial control systems.
+They present three static algorithms: FIND-String to obtain offsets of strings in firmware, FIND-LDR to find string addresses loaded by \texttt{LDR} instructions, and DBMSSL, which uses outputs from the previous two algorithms to find the base of a firmware image.
+They do not disassemble a given binary; instead, they search the bytes directly for ASCII strings and sequences encoding \texttt{LDR} instructions.
+They then use the discovered strings and addresses used as operands to \texttt{LDR} instructions to calculate a base address.
+Applying this approach to ten firmware samples collected from vendors, the correct image base was found in nine of them (for the last image, the approach was not applicable, because it did not contain enough strings, or it was encrypted/compressed, or it used the \texttt{ADR} instruction instead of \texttt{LDR}).
+
+\paragraph{Dynamic approaches \& symbolic execution}
+Another area where improvement of techniques is important, especially for dynamic analysis, is handling of hardware.
+Instead of incorporating physical hardware in analysis, the hardware can be modeled in software.
+\citen{Pretender}{gustafson2019toward} uses observations of interactions between firmware and hardware to automatically model the peripherals, allowing executing firmware in a fully emulated environment.
+They evaluate the prototype on a dataset of six firmware, retrieved from vendors and created manually, and with this evaluation, they showed that \textsc{Pretender} can achieve good execution coverage in a virtual environment that is automatically generated.
+
+Instead of fully emulating or rehosting firmware, one may conduct semi-dynamic analysis with symbolic execution.
+However, a complete analysis of code may sometimes be intractable, as the amount of paths to be explored increases exponentially.
+\citen{FIE}{davidson2013fie} addresses this problem with state pruning (removing redundant states) and memory smudging (if any memory locations in a new successor state have been modified more often than a provided threshold, the memory location gets a wildcard value, collapsing all future possible states of this variable into one).
+Also, existing symbolic execution engines such as \textsc{KLEE} do not always support the variety of architectures targeted by firmware, so the authors of \textsc{FIE} develop a modular way to add support for these architectures, specifying e.g., the memory layout of the target architecture (in their case, MSP430).
+When running, \textsc{FIE} either visits every possible state in symbolic execution, hits the chosen time limit, or finds a security/safety violation; in the latter case, it outputs a detailed description of the violation.
+Applying \textsc{FIE} to a corpus of \num{99} firmware programs scraped from vendor sites and GitHub, the tool verifies memory safety for the majority of them and finds \num{21} bugs.
+
+If one decides to fully execute the firmware in a virtual environment, there is the question of what should be done about hardware interaction.
+\citen{Avatar}{zaddach2014avatar} keeps the hardware in the loop, forwarding memory accesses to the real devices where needed, and the authors use it to analyze firmware with the goal of detecting compromise of execution by an attacker.
+The prototype can communicate with a device using different protocols depending on the device's debugging support.
+If the hardware interaction is only limited, \textsc{Avatar} allows recording those input/output operations and replaying them in the next execution, without the need to actually use the hardware.
+\textsc{Avatar} can perform a wide range of analyses, but in their evaluation, the authors focus on finding input commands that could be used to reach arbitrary execution or control flow corruption.
+They test the system on three samples obtained from vendors, and were able to detect an arbitrary execution vulnerability in one of them.
+
+\citea{redini2017bootstomp} also investigate the compromise of security by a potential attacker, but in lower-level components: bootloaders.
+\textsc{BootStomp} locates areas of modern device bootloaders where attacker input can compromise the bootloader's execution or security features.
+They use taint analysis through symbolic execution, and look at exploitation through attacker-controlled storage, by triggering a memory-corruption vulnerability or by unlocking the bootloader.
+With this approach, they find six previously unknown vulnerabilities in five bootloaders of commercial devices.
+
+Another area of investigation is the use of protocols in firmware \cite{hernandez2017firmusb,fowze2021proxray}.
+Both of these studies use symbolic execution and allow queries about protocols, but with a different scope: \citen{FirmUSB}{hernandez2017firmusb} focuses on the USB protocol, while \citen{ProXray}{fowze2021proxray} generalizes to any (unknown) protocol.
+\textsc{FirmUSB} uses domain knowledge about the USB protocol to guide symbolic execution, and allows two semantic queries about its use in firmware: \q{claimed identity} (whether claimed device characteristics reflect the real characteristics) and \q{consistent behavior} (whether the claimed functionality is actually carried out by the device).
+This lets the system detect attacks like BadUSB~\cite{badusb}, which lead to inconsistent behavior.
+On the other hand, \citen{ProXray}{fowze2021proxray} is able to learn a protocol model from known firmware, and apply it to unknown firmware to recognize protocol-relevant fields and detect functionality.
+This enables queries in the form of protocol-related constraints (such as specific code numbers, packet types, length, etc.), and these queries guide symbolic execution of the firmware to obtain an answer to the query.
+\textsc{ProXray}'s dataset consisted of \num{29} images scraped from vendors, with \num{23} used as the training set.
+They applied the tool to the USB and Bluetooth protocols, and were able to identify USB functionality automatically within all six unknown USB firmware in the testing set, with a significant speedup.
+
+A problem with dynamic analysis is that often knowledge about a device's design or the design of the underlying hardware is a prerequisite, and is not standardized for NLB firmware.
+\citen{P\textsuperscript{2}IM}{feng2020p2im} alleviates this issue, by automatically generating \q{approximate emulators}.
+Since firmware can execute on an emulator without real/fully emulated peripherals as long as it receives acceptable input from peripherals when needed (i.e., input that does not crash the firmware), the authors instead automatically generate models with the minimum required functionality.
+For evaluation, they used a dataset of \num{80} firmware, retrieved from vendors.
+Using the AFL fuzzer as the input source and a memory error detector, their results unveil 7 unique bugs; however, this approach does not model direct memory access which may occur with peripherals, particularly for embedded devices.
+
+In some cases, a device might use a Hardware Abstraction Layer (\newterm{HAL}), which the analyst can incorporate to simplify modeling of hardware in software.
+HALs are software libraries that provide access to high-level operations on the device, hiding details of the particular chip or system.
+\citen{HALucinator}{clements2020halucinator} uses these HALs, which are already provided by firmware vendors, as a basis for rehosting and analysis of firmware.
+The authors provide generic implementations of these functions as high-level replacements for HAL functions.
+They use this system for interactive emulation and fuzzing, and successfully applied it to crash firmware and uncover bugs in its code.
+For this approach to be successful, the firmware has to use a HAL, which must be available to the analyst, and separate handlers and peripheral models are required for each HAL.
+
+\subsection{Only Linux-based (LB) firmware studies}\label{sec:only LB firmware}
+As discussed in \autoref{ssec:our categorization}, we separate studies by size, and treat large-scale and small-scale studies separately in this section.
+
+\subsubsection{Large-scale studies of LB firmware}
+From the LB studies we analyzed, \result{linux-num-large-scale} of them have been large-scale~\cite{chen2016towards, david2018firmup, srivastava2019firmfuzz, kim2020firmae, zhang2019cryptorex, li2018towards, yu2022building, costin2016automated}.
+
+\paragraph{Static analysis}
+When searching and identifying binaries, performance is particularly important at a large scale.
+Since in embedded devices, firmware information (particularly the vendor and version) is associated with security vulnerabilities, \citea{li2018towards} propose a method of fine-grained fingerprint generation to capture the device, vendor, and version for a particular firmware sample, and allow easier recognition of specific firmware (and thus an easy way to determine if a firmware is vulnerable).
+The final fingerprint is generated based on the filesystem of an image.
+After an analysis of \num{5296} images (retrieved using a web crawler), they note that the recall and precision of firmware fingerprints exceeds 90\%, i.e., that this is an effective method to recognize a particular version of firmware (and thus whether it may contain vulnerabilities).
+
+Code searching is especially effective for LB firmware, because one can use existing standards to guide the search.
+For example, \citen{CryptoREX}{zhang2019cryptorex} uses known seven widely used cryptographic libraries, detected using the Buildroot tool, to detect misuse of cryptographic APIs, which may have security implications.
+They track taint statically backwards from the call sites of the APIs, and if this tracking uncovers cryptographic function misuse based on OWASP guidelines, an alert is triggered.
+With \num{165} predefined cryptographic APIs, they discovered \num{679} issues in \num{1327} firmware images.
+
+However, using known APIs for code search is not necessary: \citen{FirmUp}{david2018firmup} finds CVEs in stripped firmware images, by computing similarity between a query and target procedure.
+Each procedure is represented as hashed \qq{strands} (sub-blocks of basic blocks that compute single outputs).
+They discover \num{373} vulnerabilities in around \num{2000} executables (out of \num{5000} publicly available firmware retrieved from vendors), improving performance over the state of the art \citen{BinDiff}{bindiff} by an average of 45\%.
+
+So far, most studies have only attempted to find new vulnerabilities in firmware, but it is also worth investigating whether, once a vulnerability and its corresponding mitigation is known, the firmware is patched to protect against that vulnerability.
+\citea{yu2022building} conducted an in-depth study on the adoption of common attack mitigations against memory corruptions, by measuring their presence in more than ten thousand LB firmware of deployed embedded devices, collected through web crawling of vendor websites.
+To identify user- and kernel-level mitigations used in the firmware, they use various heuristics specific to the mitigation; for example, for stack canaries, they search for the string printed when the stack check fails, and check that the function that references this string is called from other functions.
+Kernel-level mitigations can be identified based on the architecture, kernel version, and building configurations, which can be recovered from the \texttt{.config} file in the kernel, or inferred from string constants and functions indicating the presence of mitigations if the \texttt{.config} file is missing (function symbols are recovered via Vmlinux-to-ELF).
+The results of their evaluation on \num{10685} images scraped from vendors (with \num{7977} Linux kernels) show that the majority of embedded devices did not implement user-space or kernel-level attack mitigations.
+
+\paragraph{Dynamic analysis}
+All dynamic large-scale LB research in this study has focused on exploitation of firmware at runtime.
+\citen{Firmadyne}{chen2016towards} is the first scalable automated system to use dynamic analysis, and try to exfiltrate information and run known exploits on firmware.
+First, they launch the firmware in a \qq{learning mode}, where they record system interactions with the network, and then they construct a matching environment for emulation.
+They perform three automated analyses: they check for publicly accessible web pages from the LAN interface of the image, they check unauthenticated Simple Network Management Protocol information for sensitive data, and execute \num{60} known exploits from the Metasploit framework on the device.
+The system detected \num{74} known vulnerabilities affecting \num{887} firmware images (retrieved via web crawling of \num{42} pre-selected vendors), across at least \num{89} products.
+However, it does not determine whether the detected vulnerabilities are exploitable from the Internet, and uses custom pre-built kernels, so it cannot be used to confirm vulnerabilities in kernels or kernel modules contained in the firmware.
+
+Subsequently, \citen{FirmAE}{kim2020firmae} investigated the failure cases of \citen{Firmadyne}{chen2016towards}, and found out that in the widespread case of discrepancies between the real and virtual environment, failures can often be avoided by simple heuristics.
+The authors proposed a technique of arbitrated emulation: instead of strictly following the original execution of firmware, at certain points they inject proper interventions to high-level behavior (e.g., network configuration or boot sequence), in order to allow analysis to continue.
+They implemented the prototype \textsc{FirmAE}, and evaluated it on a dataset of \num{1124} images download from vendor websites.
+Fuzzing the web services of firmware and running known exploits, \textsc{FirmAE} was able to detect 4.8 times more vulnerabilities than \textsc{FIRMADYNE}, showing that this is a viable way to increase the amount of firmware that can be successfully emulated.
+However, their heuristics are developed empirically based on the failures of \textsc{FIRMADYNE}, so they can only handle the observed cases, and may not apply to new devices and configurations.
+
+\citea{costin2016automated} focus even more on web penetration: they run the firmware in an emulator, and use web penetration tools to analyze its security at runtime, computing differences in the emulated filesystem at different points in time.
+They specifically select firmware containing web server binaries, web configuration files, and server- or client-side web interface code, based on file names and contents (e.g., HTML).
+They evaluate the firmware for the presence of vulnerabilities such as command execution and cross-site scripting, and they check how many provide HTTPS support.
+They applied this framework to study the security of embedded web interfaces in COTS devices, and out of \num{246} firmware images that they could emulate (from an original dataset of \num{1925} retrieved from vendors), they found serious vulnerabilities in \num{185} (around 75\%).
+
+Since fuzzing may bring the device into an inconsistent state, such analysis could require manual intervention, rendering fuzzing infeasible on a large scale.
+To be able to conduct large-scale fuzzing analysis, \citen{FirmFuzz}{srivastava2019firmfuzz} uses a \qq{snapshot and rollback} strategy to automatically revert firmware to a stable state if it becomes inconsistent.
+Hardware models are created automatically, by monitoring panic logs generated by a custom kernel when the firmware attempts to access a nonexistent peripheral.
+When testing for four types of vulnerabilities in \num{6427} firmware images scraped from \num{3} vendor websites, and fuzzing \q{interesting} execution paths found through static taint analysis, they discover seven new vulnerabilities across six different devices.
+
+\subsubsection{Small-scale studies of LB firmware}
+There have also been several studies that evaluate fewer than \result{const-large-scale-thresh} firmware samples~\cite{chen2021sharing, thomas2017humidify, hemel2011finding, gui2020firmcorn, zheng2019firmafl, yu2019poster}.
+
+\paragraph{Static analysis}
+As an example of static analysis on a smaller scale, the \citen{Binary Analysis Tool}{hemel2011finding} searches for strings, compares data compression, and computes differences between binaries.
+Given a binary, it uses these techniques to detect cloning of code from some repository of packages, with a primary rationale of detecting code violating the GNU General Public License.
+The authors evaluate the tool on a \qq{small number} of firmware binaries (they explicitly list \num{2} in the paper), finding that it was able to detect cloning, albeit with false positives.
+
+Another option is to conduct code search on a higher level, using a classifier to detect functionality and then categorize firmware based on a functionality profile.
+\citen{HumIDIFy}{thomas2017humidify} trains on a set of binaries, looking for features such as strings and function imports/exports, and the result of a classification of the testing set is a category label, such as \q{web-server} or \q{secure-shell daemon}, and a confidence value.
+Based on the label, the system chooses a pre-built functionality profile, and when a binary does not follow that profile based on static analysis, there is potential unexpected or hidden functionality.
+The authors manually analyze \num{100} images scraped from vendor websites to create an initial set for training.
+On the rest of the dataset, they reach a classification accuracy of 96.45\%, but a limitation is that this expected functionality profile must be defined manually.
+
+It's possible to statically detect points where an attacker could compromise the execution of firmware: \citen{SaTC}{chen2021sharing} uses taint tracking to detect security vulnerabilities in web services provided by embedded devices.
+The system recognizes front-end files and back-end programs based on file types (e.g., HTML for front-end and executable binaries for back-end), and analyzes the front-end files to extract potential keywords of user input (e.g., \textit{deviceName}).
+Then, the system detects the border binaries in the back-end by matching the strings they contain against the extracted keywords, and tries to locate the points where the binaries receive user input, using taint analysis to track where untrusted data may be used.
+If it finds a vulnerable use of tainted data, such as in a system call parameter, it checks reachability of the use, and when it's reachable, an alert is raised.
+When evaluating it on \num{39} firmware samples collected from vendors, the authors discovered \num{33} unknown bugs, which is significantly more than previous work~\cite{redini2020karonte}.
+
+\paragraph{Dynamic analysis}
+LB firmware has an OS abstraction, and as such can be emulated in both system-mode and user-mode.
+Emulators such as QEMU often run firmware in system-mode, but user-mode execution is much faster, because there's no need for, e.g., address space translation or complete emulation of system calls.
+\citen{FIRM-AFL}{zheng2019firmafl} combines the two methods in \qq{augmented process emulation}.
+Initially, the firmware boots in a system-mode emulator and the user-level programs launch inside it, and once the desired program is at a predetermined point (e.g., the beginning of the main function), it is migrated to user-mode emulation to improve execution speed.
+Re-using the dataset from \citen{Firmadyne}{chen2016towards}, they found \num{288} firmware samples useful for analysis.
+In those, they observe, on average, an 8.2 times higher throughput compared to system-mode emulation-based fuzzing.
+
+Some functions are more vulnerable to exploitation through unsafe input than others, and \citen{FIRMCORN}{gui2020firmcorn} uses this knowledge to direct its fuzzing effort.
+First, the authors group functions in IoT firmware by complexity, and then rank them by vulnerability (a function is more vulnerable if it performs memory operations and uses sensitive functions).
+They then set the fuzzing entry point based on the vulnerability results, checking stack data after a sensitive function call to detect crashes.
+In evaluation on 10 samples obtained from the vendor, they achieve significantly higher throughput than the state-of-the-art~\cite{chen2018iotfuzzer}, and discover two zero-day vulnerabilities.
+
+Firmware in IoT devices often uses stateful protocols, such as \textit{smb} and \textit{ftp}, and to fuzz such a protocol, the fuzzer must set the system to the desired state in advance.
+\citen{IoTHunter}{yu2019poster} combines a message fuzzer and a state fuzzer: the message fuzzer generates new test cases to send as input to the firmware, and the state fuzzer keeps track of the state sequence and schedules protocol states.
+Evaluating on a dataset of \num{8} samples obtained from vendors, the authors observe that this solution outperforms the black-box fuzzer \citen{boofuzz}{boofuzz} on the same dataset by up to $2.5\times$ coverage, and finds five new vulnerabilities.

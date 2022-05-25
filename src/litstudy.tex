@@ -1,0 +1,137 @@
+% vim: spell spelllang=en_us
+\documentclass[sigconf,screen,9pt]{resources/acmart}
+
+% Flag to disable all editing macros and make the document ready for
+%  submission.
+\newif\ifEditMode
+
+% Editing mode.
+% \EditModetrue
+% % The `submission' mode merges certain comments and edits, and removes some
+% % other notes, TODOs and remarks. For more details, refer to the `reviewing
+% % macros' in the `vusec.sty' file.
+\EditModefalse
+
+\usepackage{resources/vusec}
+\usepackage{resources/frontmatter}
+\usepackage{resources/aliases}
+
+% \result: insert numeric results from ../analysis/exports/numbers/*.tex
+\newcommand{\result}[1]{\input{../analysis/exports/numbers/#1}\unskip}
+% \resulttab: insert table result from ../analysis/exports/tables/*.tex
+\newcommand{\resulttab}[1]{\input{../analysis/exports/tables/#1}\unskip}
+
+% Quoting commands so I don't mess up quotes
+\newcommand*{\q}[1]{`#1'}
+\newcommand*{\qq}[1]{``#1''}
+
+% Custom citation commands
+\newcommand*{\citea}[1]{\citeauthor{#1}~\cite{#1}} % "Author [n]"
+\newcommand*{\citen}[2]{\hyperlink{cite.#2}{\textsc{#1}}~\cite{#2}} % "Name [n]" (Name in small caps)
+\renewcommand*{\citet}[2]{\hyperlink{cite.#2}{\textit{#1}}~\cite{#2}} % "Title [n]" (Title in italics)
+
+% Custom reference commands
+\newcommand*{\fullref}[1]{\hyperref[{#1}]{Section \ref{#1}~(\nameref*{#1})}} % "Section x.y (Section Name)"
+\def\sectionautorefname{Section}
+\def\subsectionautorefname{Section}
+
+% Making sure a term is defined before use, and defined only once:
+\makeatletter % Allow usage of '@' in macro names
+% For defining a term: if it's not defined before, typeset it correctly, otherwise error.
+\renewcommand*{\newterm}[1]{%
+  % If the term specialtermdef@TERM isn't defined
+  \@ifundefined{specialtermdef@\detokenize\expandafter{#1}}
+  % Define it
+  {\@namedef{specialtermdef@\detokenize\expandafter{#1}}{}%
+  % Typeset the term in italics
+  \emph{#1}}
+  % Otherwise, error: double definition
+  {\PackageError{termtrack}{Term '#1' already defined}{Double definition}}}
+
+% For using a defined term: if it hasn't been defined, error.
+\renewcommand*{\term}[1]{%
+  % If the term specialtermdef@TERM isn't defined
+  \@ifundefined{specialtermdef@\detokenize{#1}}
+  % Error: using a term before defining it
+  {\PackageError{termtrack}{Term '#1' not defined}{Use \protect\defterm\space macro}}
+  % Otherwise, typeset it
+  {#1}}
+\makeatother % Make a '@' a regular letter again
+
+\newcommand*{\HIDE}[1]{}
+% \newcommand*{\todo}[1]{\textbf{\textcolor[HTML]{ff1a1c}{#1}}}
+
+% Hyphenation rules: like \hyphenation{hy-phe-na-tion some-thing}
+% If there's no hyphen, the word won't be hyphenated
+\hyphenation{FirmXRay}
+
+\begin{document}
+
+% Thesis title.
+\newcommand{\thesistitle}{A Classification-Based Survey of Existing Firmware Research}
+
+% Author information.
+% (Used in a couple of places, so it's better to define them in one place.)
+\newcommand{\thauthor}{Alexander Balgav\'{y}}
+%  Student number.
+\newcommand{\thauthorid}{2619644}
+\newcommand{\thauthoremail}{a.balgavy@student.vu.nl}
+\newcommand{\thauthoraff}{Vrije Universiteit Amsterdam \& Universiteit van Amsterdam}
+
+% Thesis type.
+% Valid values are `vubachelor', `csmaster', `pdcsmaster', `csecmaster', and `litstudy'.
+%%
+\thtype{litstudy}
+
+% Course code.
+% \thcc{0123}
+
+% Thesis title.
+\thtitle{\thesistitle}
+
+% Paper/thesis author.
+\thauthname{\thauthor}
+\thauthid{\thauthorid}
+
+% First supervisor.
+\thsvfirst{Marius Muench}{Dr.}
+
+% Daily supervisor.
+\thsvdaily{Enrico Barberis}{M.Sc.}
+
+\thrdrsecond{Cristiano Giuffrida}{Associate Professor}
+
+\pagenumbering{gobble}
+% attach customize front matter.
+\addfrontmatter{}
+
+\title{\thesistitle}
+
+\author{\thauthor}
+\affiliation{
+  \institution{\thauthoraff}
+  \city{Amsterdam}
+  \country{NL}
+}
+\email{\thauthoremail}
+
+
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\maketitle
+\pagenumbering{arabic}
+
+\input{sections/intro}
+\input{sections/background}
+\input{sections/methodology}
+\input{sections/overview-of-literature}
+\input{sections/results}
+\input{sections/discussion}
+\input{sections/conclusion}
+
+\bibliographystyle{resources/ACM-Reference-Format}
+\bibliography{../analysis/exports/references.bib,references.bib}
+
+\end{document}

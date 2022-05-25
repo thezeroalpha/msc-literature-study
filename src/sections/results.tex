@@ -1,0 +1,53 @@
+% vim: spell spelllang=en_us
+\section{Results}\label{s:results}
+\resulttab{bigtable-non-Linux}
+\resulttab{bigtable-both LB and NLB}
+
+In total, we collected \result{total-number-of-papers} relevant sources of information that discuss analysis of firmware, enumerated in \autoref{s:overview of literature}.
+Of these \result{total-number-of-papers} texts, \result{total-nonlinux-only} focus only on NLB firmware, and \result{total-both-only} only on \textit{both} LB and NLB firmware.
+There are also \result{total-linux-only} sources that focus only on LB firmware.
+We present the full list and categorization of NLB firmware research in \autoref{tab:bigtable-non-Linux}, and research on both types of firmware in \autoref{tab:bigtable-both LB and NLB}.
+In \autoref{fig:overview plot}, we can see the research separated by firmware type and the number of firmware samples they analyze: the number of samples is on the horizontal axis, the number of research papers is on the vertical axis, and the type of firmware analyzed in those studies is indicated by color.
+It is apparent that mostly LB research used a large amount of samples, while NLB research was conducted on a smaller scale.
+
+\begin{figure}[hb]
+  \centering
+  \includegraphics[width=\linewidth]{overview-plot.png}
+  \figcap{Past firmware research by type and number of samples.}
+  \label{fig:overview plot}
+\end{figure}
+
+We can see from \autoref{tab:num-samples-binned} that the majority of studies examined less than \num{100} firmware samples.
+Specifically for NLB-only studies, only \result{non-linux-num-large-scale} analyzed more than \result{const-large-scale-thresh} samples.
+In contrast, in the sources that we found discussing only LB analysis, there is a tendency for a larger number of samples.
+
+\resulttab{num-samples-binned}
+
+The last row of \autoref{tab:num-samples-binned} shows the firmware type focus of large-scale studies (more than \result{const-large-scale-thresh} samples).
+It seems that in the history of embedded firmware research, only \result{linux-num-large-scale} analyses of LB firmware were conducted at large scale.
+It is clear that there is comparatively a lack of large-scale studies focusing only on NLB firmware -- the majority of those analyzing a large number of samples either focus only on LB firmware, or a combination of both LB and NLB firmware.
+Furthermore, the majority of studies did not share their data; however, most of the large-scale studies either provided their dataset directly (or are planning to), released it partially, or provided a link to where images were obtained.
+
+\subsection{Non-Linux-based (NLB) firmware}
+Surveying existing analysis of NLB firmware, we observe that so far there have only been \result{non-linux-num-large-scale} large-scale studies of solely NLB firmware~\cite{gritti2022heapster, wen2020firmxray}, and \result{both-num-large-scale} studies combining LB and NLB firmware~\cite{costin2014large, feng2016scalable, shirani2018binarm, zhao2022largescale}.
+Those combining both types of firmware generally have a higher proportion of LB firmware (75-90\%), though \citea{shoshitaishvili2015firmalice} use more NLB firmware.
+In addition, there have been several smaller-scale studies of only NLB firmware~\cite{clements2020halucinator, davidson2013fie, feng2020p2im, zaddach2014avatar, hernandez2017firmusb, redini2017bootstomp, gustafson2019toward} and both NLB and LB firmware~\cite{redini2020karonte, eschweiler2016discovre, muench2018what, shoshitaishvili2015firmalice, pewny2015crossarchitecture}.
+Where the majority of LB studies discussed in \autoref{sec:only LB firmware} used vendor websites for firmware retrieval, NLB studies use a wider variety of techniques, such as direct firmware extraction, custom web search, and mobile app-based crawling.
+
+\resulttab{nlb-archs}
+
+We see in \autoref{tab:nlb-archs} that the majority of NLB firmware analysis is focused on the ARM architecture, with MIPS in the second place; usually only \result{median-num-nonlinux-archs} architecture is analyzed.
+For LB firmware, the majority of studies obtain samples from the vendors' websites; for NLB firmware, the approaches are more varied, including custom web searches, submission by users, direct firmware extraction from devices, manual compilation of firmware, and methods using mobile app stores.
+\autoref{tab:nlb-device-sectors} shows the types of NLB devices that are examined in the research that we discuss here.
+IoT devices are the most common, followed by computer peripherals, and then personal, industrial, and other devices.
+
+\resulttab{nlb-device-sectors}
+
+\resulttab{nlb-analyses}
+
+Furthermore, \autoref{tab:nlb-analyses} shows which types of analyses have been the focus of NLB studies.
+It is clear that most research has been in the area of static code analysis, perhaps because it is the \q{simplest} and fastest of code analyses; a disadvantage is that vulnerabilities found with static analysis often cannot be confirmed~\cite{pewny2015crossarchitecture}.
+Static code analysis is followed in frequency by dynamic analysis and symbolic execution of code (we consider these as two separate categories, because symbolic execution is a hybrid between static and dynamic execution).
+It makes sense that interfaces have not been analyzed statically, as they will only be active at runtime.
+There are two studies that implement taint analysis of code: static~\cite{redini2020karonte}, and based on dynamic symbolic execution~\cite{redini2017bootstomp}.
+One area that seems not to have been explored much for NLB firmware is dynamic or symbolic analysis of configuration.

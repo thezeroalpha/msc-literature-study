@@ -455,14 +455,8 @@ rsconnect/
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,latex,emacs,r
 
-# Paper is generated with `make`
-litstudy.pdf
-
 # Build artifacts for LaTeX
 src/build/
-
-# Don't want to store the research papers here.
-analysis/papers/
 
 # All exports are generated from analysis/analysis.org
 analysis/exports/

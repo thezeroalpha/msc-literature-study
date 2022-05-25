@@ -1,0 +1,62 @@
+% vim: spell spelllang=en_us
+\section{Background}\label{s:background}
+This section explains concepts and techniques relevant to the discussion of firmware analysis studies.
+
+\subsection{Unpacking, disassembly, and decompilation}
+Firmware images generally consist of one or more executable binary files, and potentially other types of files (images, PDF manuals, text, keys/certificates, etc.).
+These files are packaged, or \newterm{\q{packed}}, into a single file for distribution.
+That single file can be in a disk image, or a standard archive format, potentially compressed and/or encrypted, such as a \texttt{tar} file compressed with \texttt{gzip} or a zip file.
+It can also be a binary object, with a standard header or a custom header format.
+Furthermore, the binary executable itself can be packed or obfuscated.
+In standard use, a packed binary executable will generally unpack itself using a code \q{stub}, but in analysis, this is a separate preliminary step.
+\newterm{Unpacking} refers to the extraction of these inner files, and the unraveling of binary code to a form amenable to analysis.
+
+After unpacking, a binary executable consists of byte streams: some parts may be data, and others may be platform- and architecture-specific operation codes with arguments that instruct the processor to carry out operations.
+The first step in analyzing the executable is identifying instructions: if the firmware uses a standard header that stores information about the location of the code, we can easily determine this, but if the header format is custom, we need to first determine where to start analysis.
+A different base address yields a very different disassembly, so this step is key for code analysis.
+Once we know the location of the code, we can proceed to \newterm{disassembly}: converting the byte streams to assembly instructions.
+
+It is also possible to take this further with more abstraction.
+One option is \newterm{decompilation}: converting assembly instructions (which are still platform- and architecture-specific) to a higher-level programming language, such as code in a pseudo-C syntax.
+Another option, more commonly used in analysis of firmware (either directly or as an intermediate step before decompilation), is lifting the assembly code to a slightly higher-level intermediate representation (\newterm{IR}).
+An IR, such as VEX and LLVM, is abstract enough to eliminate architectural differences and allow unified reasoning about program behavior, but not as abstract as programming languages intended for users.
+
+\subsection{Types of analysis: static, dynamic, and symbolic execution}
+Program analysis comes in different forms: static, dynamic, and hybrid.
+Static analysis examines the disassembled code without running it.
+A common method of static analysis is building control flow graphs, or \newterm{CFG}s: graphs where nodes represent basic blocks, and edges indicate the possible control flow between basic blocks.
+A \newterm{basic block} is a series of instructions with one entry point and one exit point.
+Another option for static analysis is building a \newterm{call graph}, which is similar to a \term{CFG}, except it only shows function calls.
+Data flow analysis is also common: tracking which data definitions can reach a certain point in the program.
+A metric that's often used to determine the complexity of a function statically is \newterm{cyclomatic complexity}: the number of linearly independent paths within the function, computed from its CFG.
+For example, a function with a single-condition if statement would have a cyclomatic complexity of 2, because there are two linearly independent paths: one where the condition is true, and one where it is false.
+Static analysis is often combined with \newterm{taint tracking}: a method to determine which tainted data (commonly representing attacker-controlled data) can reach various points in the program, particularly \q{interesting} points such as privileged code.
+However, static analysis may not be enough to properly analyze a program, especially if the program is obfuscated/encrypted in some way, or if an execution path is computed at runtime and cannot be discovered by inspecting the program in isolation.
+Furthermore, not all execution paths visible in static analysis may actually be reached or reachable in execution.
+
+Dynamic analysis, on the other hand, focuses on the execution of the target program, i.e., how it actually behaves at runtime.
+On desktop systems, this is often done via instrumentation: modifying the program and injecting code to collect runtime information.
+However, for embedded devices, instrumentation is often not feasible, because of differences in architectures and sometimes storage limitations (instrumentation increases the size of a program, and there may not be enough space on the device to store an instrumented version of the program).
+Therefore, a common technique for dynamic firmware analysis is executing firmware in a virtual environment.
+One option is to use an emulator; however, embedded devices can interact with a wide variety of peripherals, which may not be easily implemented in an emulator.
+Another option is rehosting, which is software-centric: hardware is either modeled in software, or the hardware interactions are forwarded to the actual peripherals.
+As in static analysis, dynamic analysis can also be combined with taint tracking, to see which points of the program tainted data reaches during actual execution.
+Another common dynamic analysis technique is fuzzing: sending various (e.g., malformed) inputs to the firmware, with the intent to crash it or to trigger a vulnerability.
+
+Finally, symbolic execution is a hybrid between static and dynamic analysis.
+It does not require the actual device for execution, but rather \q{pretends} to execute the code by modeling device state (registers, memory, etc.) in software, and acting out operations that executed instructions would normally do on the device.
+Instead of values, a symbolic execution system uses symbols, which are bound by constraints -- mathematical restrictions on the possible values for the symbol.
+It then uses an SMT solver to solve the constraints and obtain values satisfying them.
+The advantage of symbolic execution is that it does not need the actual device or a sufficiently emulated version of the device to \q{execute} the code; in fact, a symbolic execution engine could itself be considered an emulator or virtual execution engine.
+However, symbolic execution can be limited when dealing with I/O, and the number of possible paths to be explored increases exponentially (a problem known as \q{path explosion}), so symbolic execution of an entire program can become intractable.
+
+\subsection{Interaction of firmware with hardware}
+Embedded devices frequently interact with peripherals: hardware input and output devices to communicate with the \q{outside world}.
+These can be off-chip (separated physically from the processor and connected via a bus), or on-chip (sharing the processor's chip and directly interfaced).
+The processor can communicate with peripherals in several ways.
+One option is direct memory access (\newterm{DMA}), which allows transferring data directly from CPU memory to a peripheral.
+The most frequent interaction with peripherals occurs via memory-mapped I/O (\newterm{MMIO}), which maps registers of the peripheral device into a block of the processor's memory.
+Another option is port-mapped I/O (\newterm{PMIO}), where each I/O device is assigned to a port, and the CPU uses special instructions to copy data between its registers and a given port.
+Data can be read from a peripheral either based on interrupts (i.e., when data arrives, raise interrupt and read it), or based on polling (continually check the status register, and if data is available, read it).
+MMIO and PMIO are processor-initiated; a device may also itself initiate communication with the CPU, using a hardware interrupt.
+Hardware interrupts are unidirectional, and only communicate to the CPU that an event occurred and should be handled.

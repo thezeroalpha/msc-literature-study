@@ -1,0 +1,28 @@
+% vim: spell spelllang=en_us
+\section{Introduction}\label{s:intro}
+Embedded systems are continuously becoming a larger part of our lives.
+Most commonly, they are seen in commercial off-the-shelf (\newterm{COTS}) networked devices that are part of the \q{Internet of Things} (\newterm{IoT}), but they may also be used in industrial control devices, medical devices, and other sectors.
+While it is not possible to calculate the exact number of currently deployed devices, some estimate that by 2020 it would have exceeded 20 billion~\cite{nordrum2016internet}.
+Such widespread use of embedded devices makes their security all the more important, especially if used in life-critical applications.
+
+Just like desktop and mobile systems, embedded devices can have security vulnerabilities, either due to hardware, or due to issues in the software running on top of it.
+For example, the \citen{ZuoRAT}{zuorat} malware targets routers at small and home offices, and enables installation of other malware on connected hosts via DNS and HTTP hijacking, as well as allowing the attacker to conduct in-depth reconnaissance of the network.
+Project \citen{TEMPA}{tempa} shows a method that exploits the Near-Field Communication (\newterm{NFC}) and Bluetooth Low Energy (\newterm{BLE}) based unlocking system of Tesla cars to clone the owner's key and steal the car, as long as they are within range.
+The \citen{Mirai}{antonakakis2017understanding,kolias2017ddos} botnet, mainly containing vulnerable IoT devices with a peak number of 600k infections, launched a distributed denial-of-service attack (DDoS) and caused multiple-hour outages at large companies, notably Twitter, Netflix, Reddit, and GitHub.
+Considering the prominence of vulnerabilities in embedded devices and their potentially devastating effects, it is necessary to study the security of these devices and their associated software, or \newterm{\q{firmware}}.
+
+There are multiple definitions for the term \q{firmware}, but \citea{firmwaredef} defines it as \qq{the combination of a hardware device and computer instructions and data that reside as read-only software on that device.}
+In general, \q{firmware} is used to describe the software that is stored on, and controls, an embedded device.
+
+Past research into embedded device firmware has focused mostly on specific device types (e.g., routers).
+In terms of large-scale analyses, most have been carried out on firmware that is based on Linux, which is only a subset of all possible device firmware: some may have a custom kernel, or no kernel-user separation at all.
+To the best of our knowledge, there has not been a comprehensive study of existing firmware research focusing on firmware that is not based on Linux.
+
+\hfill
+
+\noindent Hence, our main contributions in this paper are:
+
+\begin{itemize}
+  \item a labeled and organized corpus of past firmware research, along with analysis scripts,\footnote{\url{https://github.com/thezeroalpha/msc-literature-study/blob/master/analysis/analysis.org}}
+  \item a summary and analysis of past studies of firmware at both large and small scale.
+\end{itemize}

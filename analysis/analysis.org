@@ -1,10 +1,11 @@
 # -*- org-refile-targets: ((nil :maxlevel . 5)); -*-
-#+STARTUP: showall hideblocks shrink inlineimages
+#+STARTUP: showall hideblocks shrink
 #+PROPERTY: header-args:bibtex :tangle "exports/references.bib"
-#+PROPERTY: header-args:ruby :tangle "exports/preprocess.rb"
+#+PROPERTY: header-args:ruby :tangle "preprocess.rb"
+#+PROPERTY: header-args:R :session r :width 7 :height 7 :tangle "analyze.R"
 #+PRIORITIES: 1 3 2
-# priorities == conference tiers
-* Large-scale firmware analysis
+#+PROPERTY: LOGGING nil
+* A Classification-Based Survey of Existing Firmware Research: corpus
 :PROPERTIES:
 :ID:       3F8C60E5-5711-416E-BE34-0296AD8E2889
 :P_analyses_ALL: static dynamic symbolic-execution taint
@@ -14,15 +15,31 @@
 :ORDERED:  nil
 :NOBLOCKING: t
 :END:
+It's best to read this document in an Org reader (such as Emacs), otherwise some links may be broken.
+
+This document contains two parts:
+- [[*Analysis][Analysis]]: statistical analysis of corpus, extracting information & generating tables/plots
+- [[*Papers][Papers]]: list of papers included in the study with their information
+
+With ~org-babel-tangle~, three files are generated:
+- [[file:exports/references.bib][exports/references.bib]]: bibtex data for the papers in the corpus
+- [[file:preprocess.rb][preprocess.rb]]: Ruby script to convert the [[file:exports/extracted.json][extracted.json]] (created in [[*Extract from this document into JSON][this elisp code]]) into a format that's easier to analyze, generating [[file:exports/corpus.json][exports/corpus.json]] and [[file:exports/corpus2.tsv][exports/corpus2.tsv]].
+- [[file:analyze.R][analyze.R]]: R script to analyze the [[file:exports/corpus2.tsv][corpus]] and generate plots/tables in [[file:exports/][exports/]]
+
 ** Analysis
 *** Preprocessing
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 **** Extract from this document into JSON
 Extract the properties from this document:
 
-#+begin_src emacs-lisp :tangle no :results file :file exports/corpus.json :file-desc "Exported corpus (JSON)"
+#+begin_src emacs-lisp :tangle no :results file :file exports/extracted.json :file-desc "Exported corpus (JSON)"
+  (require 'json)
   (let* (;; the predicate on which to filter entries: individual properties starting with P_ + the item text
          (pred (lambda (e) (and (or (string-match-p "^P_" (car e))
-                                    (string= "ITEM" (car e)))
+                                    (string= "ITEM" (car e))
+                                    (string= "NOTER_DOCUMENT" (car e)))
                                 (not (string-match-p "_ALL$" (car e))))))
 
          ;; in this function bind org-trust-scanner-tags around org-entry-properties for a speedup (see docstring of org-map-entries)
@@ -36,573 +53,127 @@ Extract the properties from this document:
 #+end_src
 
 #+RESULTS:
-[[file:exports/corpus.json][Exported corpus (JSON)]]
+[[file:exports/extracted.json][Exported corpus (JSON)]]
+
+**** Create 2 large tables for inclusion in paper
+#+begin_src ruby :results none :session ruby
+    require 'json'
+    infile = 'exports/extracted.json'
+    abort("File #{infile} not readable") unless File.readable? infile
+    data = JSON.load_file(infile)
+    data.select! { |e| e.keys.any? { |k| k =~ /^P_/ } }
+    data.map! do |h|
+      h.reduce(Hash.new) do |paper_info, (prop, v)|
+        prop_formatted = prop.downcase.delete_prefix('p_')
+
+        unless ['devices', 'priority', 'item'].include? prop_formatted
+          v = 'both LB and NLB' if prop_formatted == 'fw_types' && v == 'linux non-linux'
+          v = "\\citeauthor{#{v.delete_prefix('papers/').delete_suffix('.pdf')}} \\cite{#{v.delete_prefix('papers/').delete_suffix('.pdf')}}" if prop_formatted == 'noter_document'
+          v = v.split.map { |arch| arch =~ /ARM/ ? 'ARM' : arch }.uniq.join(' ') if prop_formatted == 'isa'
+          paper_info[prop_formatted] = v
+        end
+
+        paper_info
+      end
+    end
+    data.sort_by! { -(_1['n_analysed'].to_i) }
+
+    cols = [['noter_document', 'Document'],
+            ['devices_sector', 'Sector'],
+            ['dataset', 'Dataset status'],
+            ['isa', 'ISAs'],
+            ['n_analysed', '\\# Analyzed'],
+            ['n_scraped', '\\# Scraped'],
+            ['whats_analysed', 'Analysis focus'],
+            ['scraping_approaches', 'Scraping approaches'],
+            ['analyses', 'Analysis types']]
+
+
+    preamble = ->(fwtype) {
+      <<~EOF
+             \\begin{table*}[]
+             \\resizebox{\\linewidth}{!}{%
+             \\begin{tabular}{@{} l l l l r r l l l @{}}
+             \\toprule
+             #{cols.map(&:last).flatten.map { |s| "\\textbf{#{s}}" }.join(" & ")} \\\\
+       EOF
+    }
+
+    postamble = ->(fwtype) {
+      <<~EOF
+      \\bottomrule
+           \\end{tabular}%
+  }
+               \\caption{Categorisation of past research analyzing #{fwtype} firmware.}
+             \\label{tab:bigtable-#{fwtype}}
+  \\end{table*}
+      EOF
+    }
+
+    ['non-Linux', 'Linux', 'both LB and NLB'].each do |fwtype|
+      result = data.select {|d| d['fw_types'].downcase == fwtype.downcase }.reduce(preamble[fwtype]) do |result, h|
+        <<~EOF
+        #{result}
+        \\midrule
+        #{cols.map(&:first).flatten.map { |c| h[c].nil? ? '-' : h[c].split(' ').map { |x| x.gsub(/-/, ' ') }.join(', ') }.join(" & ")} \\\\
+        EOF
+      end + postamble[fwtype]
+      File.write("exports/tables/bigtable-#{fwtype}.tex", result)
+    end
+#+end_src
 
 **** Prepare a TSV for R
-Massage to a tabular format importable in R.
-
-I want it to look something like:
-
-| name | firmware_types.linux | firmware_types.nonlinux | firmware_types.unknown | device_types.... | ... | n_scraped | n_analysed | etc |
-|------+----------------------+-------------------------+------------------------+------------------+-----+-----------+------------+-----|
-| name | TRUE/FALSE           | TRUE/FALSE              | TRUE/FALSE             | TRUE/FALSE       | ... | NUM       | NUM        | ... |
-
-#+begin_src ruby :results pp value :session ruby
+#+begin_src ruby :results none :session ruby
   require 'json'
-  abort("File exports/corpus.json not readable") unless File.readable? 'exports/corpus.json'
+  infile = 'exports/extracted.json'
+  abort("File #{infile} not readable") unless File.readable? infile
 
-  data = JSON.load(File.read 'exports/corpus.json')
+  data = JSON.load_file(infile)
   data.select! { |e| e.keys.any? { |k| k =~ /^P_/ } }
   data.map! do |d|
     h = d.reduce(Hash.new) do |paper_info, (prop, v)|
       prop_formatted = prop.downcase.delete_prefix('p_')
       case prop_formatted
       # numeric properties
-      when 'n_scraped', 'n_analysed', 'priority'
+      when 'n_scraped', 'n_analysed', 'priority', 'pct_nlb', 'pct_lb'
         paper_info[prop_formatted] = (Integer(v) rescue -1)
-      # properties that should be copied verbatim
-      when 'item', 'devices', 'dataset'
-        paper_info[prop_formatted] = v.gsub('"', '')
-      # everything else is a category to be converted into T/F
+      when 'noter_document' # skip
+        paper_info
+      when 'item'
+        paper_info[prop_formatted] = v
+      when 'devices'
+        paper_info[prop_formatted] = v.gsub('"', '').split(', ')
       else
-        paper_info['categories'] = [] unless paper_info['categories']
-        paper_info['categories'] += v.split.map { |v| "#{prop_formatted}:#{v}" }
+        paper_info[prop_formatted] = v.split
       end
       paper_info
     end
     h['n_scraped'] = -1 unless h['n_scraped']
     h['n_analysed'] = -1 unless h['n_analysed']
+    h['pct_lb'] = -1 unless h['pct_lb']
+    h['pct_nlb'] = -1 unless h['pct_nlb']
     h
   end
-#+end_src
 
-#+RESULTS:
-#+begin_example
-[{"categories"=>
-   ["isa:ARM-Cortex-M",
-    "devices_sector:personal",
-    "devices_sector:iot",
-    "devices_sector:medical",
-    "devices_sector:other",
-    "whats_analysed:code",
-    "whats_analysed:config",
-    "scraping_approaches:app-store",
-    "fw_types:non-linux",
-    "analyses:static"],
-  "devices"=>"wearable, sensor, tag, robot, medical device, others",
-  "dataset"=>"https://github.com/OSUSecLab/FirmXRay/tree/master/dataset",
-  "n_analysed"=>-1,
-  "n_scraped"=>793,
-  "item"=>"wen: FirmXRay: Detecting Bluetooth Link Layer Vulnerabilities From Bare-Metal Firmware",
-  "priority"=>1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:other",
-    "isa:ARM-Cortex-M",
-    "whats_analysed:interfaces",
-    "whats_analysed:code",
-    "scraping_approaches:own-generation",
-    "fw_types:non-linux",
-    "analyses:dynamic"],
-  "devices"=>"development boards from Atmei, NXP, STM",
-  "n_analysed"=>16,
-  "n_scraped"=>16,
-  "item"=>"clements: halucinator: firmware re-hosting through abstraction layer emulation",
-  "priority"=>1},
- {"n_analysed"=>373,
-  "categories"=>
-   ["devices_sector:IoT",
-    "isa:ARM",
-    "whats_analysed:code",
-    "scraping_approaches:direct-approach",
-    "scraping_approaches:vendor-website",
-    "fw_types:non-linux",
-    "analyses:static"],
-  "devices"=>"printers",
-  "dataset"=>"unavailable",
-  "item"=>"cui: when firmware modifications attack: a case study of embedded exploitation",
-  "priority"=>1,
-  "n_scraped"=>-1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["isa:RISC-MSP430",
-    "devices_sector:other",
-    "devices_sector:computer-peripherals",
-    "whats_analysed:interfaces",
-    "scraping_approaches:vendor-website",
-    "scraping_approaches:custom-search",
-    "fw_types:non-linux",
-    "analyses:symbolic-execution"],
-  "devices"=>"MSP430 microcontrollers (card reader, USB drivers, community projects, Contiki OS)",
-  "n_analysed"=>99,
-  "n_scraped"=>99,
-  "item"=>"davidson: fie on firmware: finding vulnerabilities in embedded systems using symbolic execution",
-  "priority"=>1},
- {"dataset"=>"https://github.com/RiS3-Lab/p2im-real_firmware/",
-  "categories"=>
-   ["devices_sector:other",
-    "devices_sector:industrial",
-    "isa:ARM-Cortex-M",
-    "whats_analysed:interfaces",
-    "scraping_approaches:vendor-website",
-    "fw_types:non-linux",
-    "analyses:dynamic"],
-  "devices"=>
-   "self-balancing robot, industrial programmable logic controller, gateway device, drone, CNC port of Grbl milling controller, commercial reflow oven, console for RIOT OS, steering control for self driving vehicle, soldering iron, industrial heat press",
-  "n_scraped"=>80,
-  "n_analysed"=>80,
-  "item"=>"feng: p2im: scalable and hardware-independent firmware testing via automatic peripheral interface modeling",
-  "priority"=>1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:computer-peripherals",
-    "devices_sector:IoT",
-    "devices_sector:personal",
-    "isa:ARMv5",
-    "isa:ARMv4T",
-    "whats_analysed:code",
-    "scraping_approaches:direct-approach",
-    "fw_types:non-linux",
-    "analyses:dynamic",
-    "analyses:symbolic-execution"],
-  "devices"=>"bootloader of HDD, Zigbee, Motorola C118 GSM stack",
-  "n_analysed"=>3,
-  "n_scraped"=>3,
-  "item"=>"zaddach: avatar: a framework to support dynamic security analysis of embedded systems' firmwares",
-  "priority"=>1},
- {"categories"=>
-   ["devices_sector:personal",
-    "devices_sector:other",
-    "devices_sector:IoT",
-    "devices_sector:medical",
-    "devices_sector:industrial",
-    "isa:ARM",
-    "whats_analysed:code",
-    "scraping_approaches:existing-dataset",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:symbolic-execution"],
-  "devices"=>
-   "wearable, upgrade tool, others, sensor, medical devices, bike accessory, smart eyeglasses, tracker, switch, car accessory, robot, smart lock, smart light, battery, smart home, game accessory, agricultural equipment, thermometer, beacon, firearm accessory, headphone, alarm",
-  "dataset"=>"https://github.com/seemoo-lab/fitness-firmware",
-  "n_analysed"=>819,
-  "n_scraped"=>819,
-  "item"=>"gritti: heapster: analyzing the security of dynamic allocators for monolithic firmware images",
-  "priority"=>1},
- {"categories"=>
-   ["devices_sector:computer-peripherals",
-    "isa:Intel-8051",
-    "whats_analysed:code",
-    "scraping_approaches:vendor-website",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:symbolic-execution"],
-  "devices"=>"Phison 2251-03 controller, EzHID keyboard for Cypress EZ-USB",
-  "dataset"=>"http://ezhid.sourceforge.net/sunkbd.html",
-  "n_scraped"=>2,
-  "n_analysed"=>2,
-  "item"=>"hernandez: firmusb: vetting usb device firmware using domain informed symbolic execution",
-  "priority"=>1},
- {"categories"=>
-   ["devices_sector:personal",
-    "isa:ARMv8A",
-    "whats_analysed:code",
-    "scraping_approaches:vendor-website",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:dynamic",
-    "analyses:symbolic-execution",
-    "analyses:taint"],
-  "devices"=>"Huawei P8 lite phone, Sony Xperia XA phone, Nexu 9 tablet",
-  "dataset"=>"https://github.com/ucsb-seclab/BootStomp/tree/master/bootloaders",
-  "n_analysed"=>5,
-  "n_scraped"=>5,
-  "item"=>"redini: bootstomp: on the security of bootloaders in mobile devices",
-  "priority"=>1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:computer-peripherals",
-    "isa:ARMv5TE",
-    "whats_analysed:code",
-    "scraping_approaches:direct-approach",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:dynamic"],
-  "devices"=>"HDD",
-  "n_analysed"=>1,
-  "n_scraped"=>1,
-  "item"=>"zaddach: implementation an implications of a stealth hard-drive backdoor",
-  "priority"=>2},
- {"dataset"=>"https://github.com/ucsb-seclab/pretender/tree/master/test_programs",
-  "categories"=>
-   ["isa:ARMv7-M-Thumb",
-    "isa:ARMv6-M-Thumb",
-    "devices_sector:IoT",
-    "fw_types:non-linux",
-    "scraping_approaches:vendor-website",
-    "scraping_approaches:own-generation",
-    "whats_analysed:code",
-    "analyses:dynamic"],
-  "devices"=>"door lock controller, thermostat",
-  "n_analysed"=>6,
-  "n_scraped"=>6,
-  "item"=>"gustafson: toward the analysis of embedded firmware through automated re-hosting",
-  "priority"=>2},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:computer-peripherals",
-    "isa:MIPS",
-    "whats_analysed:code",
-    "scraping_approaches:direct-approach",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:dynamic"],
-  "devices"=>"network interface card",
-  "n_analysed"=>1,
-  "n_scraped"=>1,
-  "item"=>"delugre: closer to metal: reverse-engineering the broadcom netextreme's firmware",
-  "priority"=>3},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["isa:CR816",
-    "devices_sector:computer-peripherals",
-    "whats_analysed:code",
-    "scraping_approaches:direct-approach",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:dynamic"],
-  "devices"=>"battery",
-  "item"=>"miller: battery firmware hacking",
-  "priority"=>3,
-  "n_scraped"=>-1,
-  "n_analysed"=>-1},
- {"dataset"=>"unavailable",
-  "categories"=>["devices_sector:computer-peripherals", "isa:AVR", "whats_analysed:code", "scraping_approaches:vendor-website", "fw_types:non-linux", "analyses:static"],
-  "devices"=>"Logitech G600 mouse",
-  "n_analysed"=>1,
-  "n_scraped"=>1,
-  "item"=>"maskiewicz: mouse trap: exploiting firmware updates in usb peripherals",
-  "priority"=>3},
- {"dataset"=>"unavailable",
-  "categories"=>["isa:ARM", "devices_sector:industrial", "fw_types:non-linux", "scraping_approaches:vendor-website", "whats_analysed:code", "analyses:static"],
-  "devices"=>"programmable logic controller",
-  "n_scraped"=>1,
-  "n_analysed"=>1,
-  "item"=>"basnight: firmware modification attacks on programmable logic controllers",
-  "priority"=>3},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["isa:ARMv7-M-Thumb",
-    "devices_sector:IoT",
-    "whats_analysed:code",
-    "whats_analysed:credentials",
-    "scraping_approaches:direct-approach",
-    "fw_types:non-linux",
-    "analyses:static"],
-  "devices"=>"internet-connected light bulb",
-  "item"=>"chapman: hacking into internet connected light bulbs",
-  "priority"=>3,
-  "n_scraped"=>-1,
-  "n_analysed"=>-1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:computer-peripherals", "isa:RISC-custom", "whats_analysed:code", "scraping_approaches:vendor-website", "fw_types:non-linux", "analyses:static"],
-  "devices"=>"apple keyboard",
-  "item"=>"chen: reversing and exploiting an apple firmware update",
-  "priority"=>3,
-  "n_scraped"=>-1,
-  "n_analysed"=>-1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:computer-peripherals",
-    "isa:RISC-MSP430",
-    "isa:Intel-8051",
-    "whats_analysed:code",
-    "scraping_approaches:vendor-website",
-    "fw_types:non-linux",
-    "analyses:symbolic-execution"],
-  "devices"=>"USB communication device class, USB human interface device class, USB mass storage class",
-  "n_analysed"=>29,
-  "n_scraped"=>29,
-  "item"=>"fowze: proxray: protocol model learning and guided firmware analysis",
-  "priority"=>3},
- {"dataset"=>"unavailable",
-  "categories"=>["isa:ARM", "devices_sector:industrial", "whats_analysed:code", "scraping_approaches:vendor-website", "fw_types:non-linux", "analyses:static"],
-  "devices"=>"industrial control system devices (programmable logic controllers, switch, gateway, etc.)",
-  "n_analysed"=>10,
-  "n_scraped"=>10,
-  "item"=>"zhu: a methodology for determining the image base of arm-based industrial control system \uFB01rmware",
-  "priority"=>3},
- {"dataset"=>"http://firmware.re/usenixsec14/",
-  "categories"=>
-   ["devices_sector:personal",
-    "devices_sector:IoT",
-    "devices_sector:industrial",
-    "isa:ARM",
-    "isa:MIPS",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "whats_analysed:credentials",
-    "whats_analysed:config",
-    "scraping_approaches:vendor-website",
-    "scraping_approaches:FTP",
-    "scraping_approaches:custom-search",
-    "scraping_approaches:user-submission",
-    "analyses:static"],
-  "devices"=>"PC BIOS, Camera, Router, ADSL, Gateway, programmable logic controller, DSLAM, ISDN Server, Voip, Modem, Home automation",
-  "n_analysed"=>32356,
-  "n_scraped"=>172751,
-  "item"=>"costin: Large-scale analysis of Security of Embedded Firmware",
-  "priority"=>1},
- {"categories"=>
-   ["devices_sector:IoT",
-    "devices_sector:personal",
-    "isa:ARM",
-    "isa:AARCH64",
-    "isa:PowerPC",
-    "scraping_approaches:vendor-website",
-    "scraping_approaches:existing-dataset",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "whats_analysed:code",
-    "analyses:static",
-    "analyses:taint"],
-  "devices"=>"IoT, Huawei phone, Nvidia tablet",
-  "dataset"=>"https://github.com/ucsb-seclab/karonte",
-  "n_analysed"=>-1,
-  "n_scraped"=>952,
-  "item"=>"redini: Karonte: Detecting insecure multi-binary interactions in embedded firmware",
-  "priority"=>1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:IoT",
-    "isa:ARM",
-    "isa:MIPS",
-    "isa:Intel-x86",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "scraping_approaches:vendor-website",
-    "scraping_approaches:FTP",
-    "scraping_approaches:existing-dataset",
-    "scraping_approaches:own-generation",
-    "whats_analysed:code",
-    "analyses:static"],
-  "devices"=>"IP cameras, routers, access points, various IoT",
-  "n_analysed"=>8126,
-  "n_scraped"=>33045,
-  "item"=>"feng: Scalable Graph-based Bug Search for Firmware Images",
-  "priority"=>1},
- {"categories"=>
-   ["devices_sector:IoT",
-    "isa:Intel-x86",
-    "isa:Intel-x64",
-    "isa:ARMv7",
-    "isa:MIPS",
-    "whats_analysed:code",
-    "scraping_approaches:vendor-website",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "analyses:static"],
-  "devices"=>"Router firmware DD-WRT, Netgreat ReadyNAS",
-  "dataset"=>"unavailable",
-  "n_scraped"=>2,
-  "n_analysed"=>2,
-  "item"=>"eschweiler: discovre: efficient cross-architecture identification of bugs in binary code",
-  "priority"=>1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["isa:ARMv7",
-    "isa:ARMv4",
-    "isa:ARMv7-M-Thumb",
-    "devices_sector:other",
-    "devices_sector:IoT",
-    "whats_analysed:code",
-    "whats_analysed:interfaces",
-    "scraping_approaches:unknown",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "analyses:dynamic"],
-  "devices"=>"single board computer, router, IP camera, development board",
-  "n_scraped"=>3,
-  "n_analysed"=>3,
-  "item"=>"muench: what you corrupt is not what you crash: challenges in fuzzing embedded devices",
-  "priority"=>1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["isa:ARM",
-    "isa:PowerPC",
-    "devices_sector:IoT",
-    "whats_analysed:code",
-    "scraping_approaches:unknown",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:symbolic-execution"],
-  "devices"=>"smart meter, CCTV camera, laser mono printer",
-  "n_analysed"=>3,
-  "n_scraped"=>3,
-  "item"=>"shoshitaishvili: firmalice - automatic detection of authentication bypass vulnerabilities in binary firmware",
-  "priority"=>1},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:IoT",
-    "isa:ARM",
-    "isa:Intel-x86",
-    "isa:MIPS",
-    "whats_analysed:code",
-    "scraping_approaches:unknown",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "analyses:static"],
-  "devices"=>"router firmware DD-WRT, Netgear ReadyNAS",
-  "n_analysed"=>60,
-  "n_scraped"=>60,
-  "item"=>"pewny: cross-architecture bug search in binary executables",
-  "priority"=>1},
- {"categories"=>
-   ["isa:ARM",
-    "devices_sector:computer-peripherals",
-    "devices_sector:IoT",
-    "whats_analysed:code",
-    "scraping_approaches:vendor-website",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "analyses:static",
-    "analyses:dynamic"],
-  "dataset"=>"http://www.seagate.com/staticfiles/support/downloads/firmware/MooseDT-MX1A-3D4D-DMax22.iso",
-  "devices"=>"Seagate HDD, Vicon IPCAM 960",
-  "n_scraped"=>2,
-  "n_analysed"=>2,
-  "item"=>"costin: embedded devices security and firmware reverse engineering",
-  "priority"=>3},
- {"dataset"=>"unavailable",
-  "categories"=>
-   ["devices_sector:IoT",
-    "isa:ARM",
-    "fw_types:linux",
-    "fw_types:non-linux",
-    "whats_analysed:code",
-    "scraping_approaches:vendor-website",
-    "scraping_approaches:FTP",
-    "analyses:static"],
-  "devices"=>"intelligent electronic devices in smart grid",
-  "n_analysed"=>5756,
-  "item"=>"shirani: binarm: scalable and efficient detection of vulnerabilities in firmware images of intelligent electronic devices",
-  "priority"=>3,
-  "n_scraped"=>-1},
- {"categories"=>["whats_analysed:interfaces", "scraping_approaches:vendor-website", "scraping_approaches:FTP", "fw_types:linux", "analyses:dynamic"],
-  "n_analysed"=>9486,
-  "n_scraped"=>23035,
-  "item"=>"chen: Towards Automated Dynamic Analysis for Linux-based Embedded Firmware",
-  "priority"=>0},
- {"categories"=>
-   ["whats_analysed:code", "whats_analysed:config", "whats_analysed:interfaces", "scraping_approaches:unknown", "fw_types:linux", "analyses:static", "analyses:dynamic"],
-  "item"=>"costin: automated dynamic firmware analysis at scale: a case study on embedded web interfaces",
-  "priority"=>0,
-  "n_scraped"=>-1,
-  "n_analysed"=>-1},
- {"n_analysed"=>2000,
-  "n_scraped"=>5000,
-  "categories"=>["whats_analysed:code", "scraping_approaches:vendor-website", "fw_types:linux", "analyses:static"],
-  "item"=>"david: firmup: precise static detection of common vulnerabilities in firmware",
-  "priority"=>0},
- {"n_scraped"=>6427,
-  "n_analysed"=>1013,
-  "categories"=>
-   ["whats_analysed:code", "whats_analysed:credentials", "scraping_approaches:vendor-website", "fw_types:linux", "analyses:static", "analyses:dynamic", "analyses:taint"],
-  "item"=>"srivastava: firmfuzz: automated iot firmware introspection and analysis",
-  "priority"=>0},
- {"n_analysed"=>295,
-  "n_scraped"=>9493,
-  "categories"=>["whats_analysed:interfaces", "scraping_approaches:vendor-website", "scraping_approaches:existing-dataset", "fw_types:linux", "analyses:dynamic"],
-  "item"=>"zheng: firm-afl: high-throughput greybox fuzzing of iot firmware via augmented process emulation",
-  "priority"=>0},
- {"n_analysed"=>1124,
-  "n_scraped"=>1306,
-  "categories"=>["whats_analysed:code", "scraping_approaches:vendor-website", "fw_types:linux", "analyses:dynamic"],
-  "item"=>"kim: firmae: towards large-scale emulation of iot firmware for dynamic analysis",
-  "priority"=>0},
- {"n_analysed"=>50,
-  "n_scraped"=>15438,
-  "categories"=>["whats_analysed:code", "scraping_approaches:vendor-website", "fw_types:linux", "analyses:static"],
-  "item"=>"thomas: humidify: a tool for hidden functionality detection in firmware",
-  "priority"=>0},
- {"n_analysed"=>521,
-  "n_scraped"=>1327,
-  "categories"=>["whats_analysed:code", "scraping_approaches:unknown", "fw_types:linux", "analyses:static", "analyses:taint"],
-  "item"=>"zhang: CryptoREX: large-scale analysis of cryptographic misuse in IoT",
-  "priority"=>0},
- {"n_analysed"=>5296,
-  "n_scraped"=>9716,
-  "categories"=>["whats_analysed:interfaces", "scraping_approaches:vendor-website", "fw_types:linux", "analyses:dynamic"],
-  "item"=>"li: towards fine-grained fingerprinting of firmware in online embedded devices",
-  "priority"=>0},
- {"categories"=>["fw_types:linux", "scraping_approaches:unknown", "whats_analysed:code", "analyses:static"],
-  "n_analysed"=>2,
-  "n_scraped"=>2,
-  "item"=>"hemel: finding software license violations through binary code clone detection",
-  "priority"=>0},
- {"n_scraped"=>11,
-  "n_analysed"=>11,
-  "categories"=>["whats_analysed:code", "whats_analysed:interfaces", "scraping_approaches:vendor-website", "fw_types:linux", "analyses:static", "analyses:dynamic"],
-  "item"=>"gui: firmcorn: vulnerability-oriented fuzzing of iot firmware via optimized virtual execution",
-  "priority"=>0},
- {"n_analysed"=>8,
-  "n_scraped"=>8,
-  "categories"=>["whats_analysed:interfaces", "scraping_approaches:vendor-website", "fw_types:linux", "analyses:dynamic"],
-  "item"=>"yu: poster: fuzzing iot firmware via multi-stage message generation",
-  "priority"=>0},
- {"categories"=>["fw_types:linux"], "item"=>"yu: building embedded systems like it\u2019s 1996", "priority"=>0, "n_scraped"=>-1, "n_analysed"=>-1}]
-#+end_example
-
-Create the set of columns from all possible values of all categories:
-
-#+begin_src ruby :results none p :session ruby
-  categories = data.map { |d| d['categories'] }.flatten.uniq
-#+end_src
-
-Export it all to CSV format:
-
-#+begin_src ruby :results value :session ruby
-  tsv_header = ['item', 'n_scraped', 'n_analysed', 'priority', 'devices', 'dataset'] + categories
+  tsv_header = data.map(&:keys).flatten.uniq
 
   tsv_lines = data.reduce([tsv_header.join("\t")]) do |finstr, d|
     s = tsv_header.reduce([]) do |arr, h|
-      # If the header is a key directly, add the value
-      if d.keys.include? h
-        arr << d[h]
-
-      # If it's a category, add a boolean indicating if the paper has that category
+      if d[h].is_a? Array
+        arr << d[h].join(',')
       else
-        arr << (d['categories'].include?(h) ? "T" : "F") # using T/F lets R automatically read it as a boolean
+        arr << d[h].to_s
       end
     end
     finstr << s.join("\t")
   end
 
-  File.write 'exports/corpus.tsv', tsv_lines.join("\n")
-
+  File.write 'exports/corpus2.tsv', tsv_lines.join("\n")
 #+end_src
 
-#+RESULTS:
-: 10768
-
-[[file:exports/corpus.tsv][Exported corpus (TSV)]]
 
 *** Analysing
-**** Notes
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-[[file:~/Documents/life/archive.org::*meet with Enrico][Notes from meeting with Enrico & Marius]]
-
-Prioritize papers from conferences:
-- 1st tier: USENIX security, ACM CCS, NDSS, IEEE S&P
-- 2nd tier: RAID, EuroS&P, AsiaCCS, ACSAC
 **** Analysis
-:PROPERTIES:
-:header-args:R: :session r :width 7 :height 7
-:END:
 We write results to a file in ~exports/numbers/~:
 
 #+begin_src R :results none
@@ -612,290 +183,379 @@ We write results to a file in ~exports/numbers/~:
 
 #+end_src
 
-We now have a [[file:exports/corpus.tsv][corpus]].
+Use the following libraries:
+
+#+begin_src R :results none
+  library(tidyverse)
+  library(xtable)
+#+end_src
+
+Some options for xtable export:
+#+begin_src R :results none
+  xtable.opt.subtable = function() {
+    options(xtable.type='latex',
+            xtable.include.rownames=FALSE,
+            xtable.floating.environment='subtable',
+            xtable.table.placement='t')
+  }
+  xtable.opt.table = function() {
+    options(xtable.type='latex',
+            xtable.include.rownames=FALSE,
+            xtable.floating.environment='table',
+            xtable.table.placement='tb')
+  }
+#+end_src
+
+We now have a [[file:exports/corpus2.tsv][corpus]].
 
 #+begin_src R
-  library(ggplot2)
-  d = read.csv('exports/corpus.tsv', sep="\t", header=TRUE)
-  write_result(nrow(d), 'total-number-of-papers')
-  nrow(d)
+  rows = nrow(read_tsv('exports/corpus2.tsv'))
+  write_result(rows, 'total-number-of-papers')
+  rows
 #+end_src
 
 #+RESULTS:
-: 41
-
-Corpus has columns:
-
-#+begin_src R
-  colnames(d)
-#+end_src
+: 34
 
 The corpus has Linux and non-Linux/both firmware research:
 
 #+begin_src R
-  linux_only = d[d$fw_types.linux & !d$fw_types.non.linux,]
-  write_result(nrow(linux_only), 'total-linux-only')
+  counts = read_tsv('exports/corpus2.tsv') %>% count(fw_types)
 
-  nonlinux_only = d[d$fw_types.non.linux & !d$fw_types.linux,]
-  write_result(nrow(nonlinux_only), 'total-nonlinux-only')
+  linux_only = counts[counts$fw_types == 'linux', 'n'] %>% as.numeric()
+  write_result(linux_only, 'total-linux-only')
 
-  both = d[d$fw_types.non.linux & d$fw_types.linux,]
-  write_result(nrow(both), 'total-both-only')
+  nonlinux_only = counts[counts$fw_types == 'non-linux', 'n'] %>% as.numeric()
+  write_result(nonlinux_only, 'total-nonlinux-only')
 
-  nonlinux = d[!(d$fw_types.linux & !d$fw_types.non.linux),]
-  write_result(nrow(nonlinux), 'total-not-only-linux')
+  both = counts[counts$fw_types == 'linux,non-linux', 'n'] %>% as.numeric()
+  write_result(both, 'total-both-only')
 
-  sprintf("Linux only: %s\nNon-linux only: %s\nboth only: %s\nNot only Linux: %s", nrow(linux_only), nrow(nonlinux_only), nrow(both), nrow(nonlinux))
+  nonlinux = both + nonlinux_only
+  write_result(nonlinux, 'total-not-only-linux')
+
+  sprintf("Linux only: %s\nNon-linux only: %s\nboth only: %s\nNot only Linux: %s", linux_only, nonlinux_only, both, nonlinux)
 #+end_src
 
 #+RESULTS:
-| Linux only: 13     |
-| Non-linux only: 19 |
+| Linux only: 14     |
+| Non-linux only: 11 |
 | both only: 9       |
-| Not only Linux: 28 |
+| Not only Linux: 20 |
 
 Let's say a large-scale study is one with over 500 samples analysed:
 
 #+begin_src R :results none
   LARGE_SCALE_THRESHOLD = 500 # samples
+  write_result(LARGE_SCALE_THRESHOLD, 'const-large-scale-thresh')
 #+end_src
 
 The questions we want to answer:
 
-***** what kinds of non-Linux devices are most often analysed?
+***** how many samples do non-Linux studies vs Linux studies analyze?
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-#+begin_src R :results graphics file :file exports/img/devices_analysed.svg
-  devices = nonlinux[, grepl("devices_sector.", colnames(nonlinux))]
-  device_nums = data.frame(types=colnames(devices), counts=sapply(colnames(devices), FUN=function(x) { sum(nonlinux[,x]) }))
-  device_nums$types = sub('devices_sector.', '', device_nums$types)
-  device_nums$types = factor(device_nums$types, levels=device_nums$types[order(device_nums$count)])
-
-  ggplot(device_nums) + aes(x=types, y=counts) + geom_col(color='black', fill='cornflowerblue') + scale_y_continuous(breaks=scales::breaks_width(1))
-#+end_src
-
-#+RESULTS:
-[[file:exports/img/devices_analysed.svg]]
-
-***** how many samples do non-Linux studies analyze?
-#+begin_src R
-  unknown = nonlinux$n_analysed == -1
-  sprintf("No analysed data for %s, leaving %s", sum(unknown), sum(!unknown))
-#+end_src
-
-#+RESULTS:
-: No analysed data for 4, leaving 15
-
-#+begin_src R :results graphics file :file exports/img/non-linux-n-analyzed.svg
-  known = nonlinux[!unknown,]
-  known$n_analysed_bin = sapply(known$n_analysed, function(x) {
-    if (x <= 10)
-      "<= 10"
-    else if (x > 10 && x <= 50)
-      "11-50"
-    else if (x > 50 && x <= 100)
-      "51-100"
-    else if (x > 100 && x <= 500)
-      "101-500"
-    else
-      "> 500"
-  })
-
-  known$n_analysed_bin = factor(known$n_analysed_bin, levels=c('<= 10', '11-50', '51-100', '101-500', '> 500'))
-
-  ggplot(known) + aes(x=n_analysed_bin) + geom_histogram(stat="count", color='black', fill='cornflowerblue') + scale_y_continuous(breaks=scales::breaks_width(1))
-#+end_src
-
-#+RESULTS:
-[[file:exports/img/non-linux-n-analyzed.svg]]
-
-***** of the 'large scale' studies, how many focus on non-linux?
-How many large scale studies are there?
+How many were large scale?
 
 #+begin_src R
-  large = d[d$n_analysed >= LARGE_SCALE_THRESHOLD,]
-  nrow(large)
+  t = read_tsv('exports/corpus2.tsv') %>%
+    filter(n_analysed > LARGE_SCALE_THRESHOLD) %>%
+    select(fw_types) %>%
+    count(fw_types) %>%
+    mutate(fw_types=case_match(fw_types,
+                               'linux' ~ 'Linux',
+                               'linux,non-linux' ~ 'Both',
+                               'non-linux' ~ 'Non-Linux'))
+
+  large_scale_nlb = as.numeric(t[t$fw_types == 'Non-Linux', 'n'])
+  write_result(large_scale_nlb, 'non-linux-num-large-scale')
+
+  large_scale_lb = as.numeric(t[t$fw_types == 'Linux', 'n'])
+  write_result(large_scale_lb, 'linux-num-large-scale')
+
+  large_scale_both = as.numeric(t[t$fw_types == 'Both', 'n'])
+  write_result(large_scale_both, 'both-num-large-scale')
+
+  write_result(large_scale_nlb + large_scale_both, 'non-linux-and-both-num-large-scale')
+
+  sprintf("LB %d, NLB %d, Both %d", large_scale_lb, large_scale_nlb, large_scale_both)
 #+end_src
 
 #+RESULTS:
-: 10
+: LB 8, NLB 2, Both 4
 
-Distribution of firmware types in large-scale studies:
-
-#+begin_src R :results graphics file :file exports/img/large_scale_fw_types.svg
-  large$fw_types = ifelse(large$fw_types.linux & large$fw_types.non.linux,
-                          'both',
-                   ifelse(large$fw_types.linux,
-                          'linux',
-                          'non-linux'))
-  ggplot(large) + aes(fw_types) + geom_histogram(stat='count', color='black', fill='cornflowerblue') + scale_y_continuous(breaks=scales::breaks_width(1))
-#+end_src
-
-#+RESULTS:
-[[file:exports/img/large_scale_fw_types.svg]]
-
-***** for 'large scale' studies, what firmware retrieval methods are used?
-How many large scale studies?
-
-#+begin_src R
-  largescale = d$n_analysed >= LARGE_SCALE_THRESHOLD
-  sprintf("Large scale studies: %s/%s", sum(largescale), nrow(d))
-
-#+end_src
-
-#+RESULTS:
-: Large scale studies: 10/41
-
-#+begin_src R :results graphics file :file exports/img/large_scale_scraping_approaches.svg :width 10 :height 10
-  scraping_approaches = d[largescale, grepl("scraping_approaches.", colnames(d))]
-  scraping_approaches_nums = data.frame(types=colnames(scraping_approaches), counts=sapply(colnames(scraping_approaches), FUN=function(x) { sum(scraping_approaches[,x]) }))
-  scraping_approaches_nums = scraping_approaches_nums[scraping_approaches_nums$counts > 0,]
-  scraping_approaches_nums$types = sub('scraping_approaches.', '', scraping_approaches_nums$types)
-  scraping_approaches_nums$types = factor(scraping_approaches_nums$types, levels=scraping_approaches_nums$types[order(scraping_approaches_nums$count)])
-  ggplot(scraping_approaches_nums) + aes(x=types, y=counts) + geom_col(color='black', fill='cornflowerblue') + scale_y_continuous(breaks=scales::breaks_width(1))
-#+end_src
-
-#+RESULTS:
-[[file:exports/img/large_scale_scraping_approaches.svg]]
-
-***** what kinds of analyses are done on non-linux devices?
-How many non-linux devices do we have?
-
-#+begin_src R
-  nonlinux = d[d$fw_types.non.linux,]
-  sprintf("Non-linux: %s/%s", nrow(nonlinux), nrow(d))
-#+end_src
-
-#+RESULTS:
-: Non-linux: 28/41
-
-What kind of analyses?
-
-#+begin_src R :results graphics file :file exports/img/analyses_on_nonlinux.svg
-  analyses = nonlinux[, grepl("analyses.", colnames(nonlinux))]
-  analyses_nums = data.frame(types=colnames(analyses), counts=sapply(colnames(analyses), FUN=function(x) { sum(d[,x]) }))
-  analyses_nums$types = sub('analyses.', '', analyses_nums$types)
-  analyses_nums$types = factor(analyses_nums$types, levels=analyses_nums$types[order(analyses_nums$count)])
-  ggplot(analyses_nums) + aes(x=types, y=counts) + geom_col(color='black', fill='cornflowerblue') + scale_y_continuous(breaks=scales::breaks_width(2))
-#+end_src
-
-#+RESULTS:
-[[file:exports/img/analyses_on_nonlinux.svg]]
-
-What is analysed?
-
-#+begin_src R :results graphics file :file exports/img/whats_analysed_nonlinux.svg
-  head(nonlinux)
-  whats_analysed = nonlinux[, grepl("whats_analysed.", colnames(nonlinux))]
-  whats_analysed_nums = data.frame(types=colnames(whats_analysed), counts=sapply(colnames(whats_analysed), FUN=function(col) { sum(whats_analysed[, col]) }))
-  whats_analysed_nums$types = sub('whats_analysed.', '', whats_analysed_nums$types)
-  whats_analysed_nums$types = factor(whats_analysed_nums$types, levels=whats_analysed_nums$types[order(whats_analysed_nums$count)])
-  ggplot(whats_analysed_nums) + aes(x=types, y=counts) + geom_col(color='black', fill='cornflowerblue') + scale_y_continuous(breaks=scales::breaks_width(2))
-#+end_src
-
-#+RESULTS:
-[[file:exports/img/whats_analysed_nonlinux.svg]]
-
-What about the combinations -- static code vs dynamic code analysis, etc.
+Maybe as a table:
 
 #+begin_src R :colnames yes
-  data.frame(types=c('static code', 'dynamic code', 'dynamic taint analysis', 'static taint analysis', 'static config', 'dynamic config'),
-             counts=c(sum(nonlinux$whats_analysed.code & nonlinux$analyses.static),
-                      sum(nonlinux$whats_analysed.code & nonlinux$analyses.dynamic),
-                      sum(nonlinux$analyses.taint & nonlinux$analyses.dynamic),
-                      sum(nonlinux$analyses.taint & nonlinux$analyses.static),
-                      sum(nonlinux$whats_analysed.config & nonlinux$analyses.static),
-                      sum(nonlinux$whats_analysed.config & nonlinux$analyses.dynamic)))
-
-
+  res = read_tsv('exports/corpus2.tsv') %>%
+    select(fw_types, n_analysed) %>%
+    mutate(samples=case_when(
+             n_analysed <= 10 ~ '<= 10',
+             n_analysed > 10 & n_analysed <= 50 ~ '11-50',
+             n_analysed > 50 & n_analysed <= 100 ~ '51-100',
+             n_analysed > 100 & n_analysed <= 500 ~ '101-500',
+             n_analysed > 500 ~ '> 500')) %>%
+    count(fw_types, samples) %>%
+    transmute(fw_types=case_match(fw_types, 'linux' ~ 'LB', 'linux,non-linux' ~ 'Both', 'non-linux' ~ 'NLB'), `Firmware samples`=samples, n=n) %>%
+    pivot_wider(names_from=fw_types, values_from=n, values_fill=0) %>%
+    arrange(factor(`Firmware samples`, levels=c('<= 10', '11-50', '51-100', '101-500', '> 500'))) %>%
+    mutate(Total=LB+Both+NLB) %>%
+    relocate(`Firmware samples`, 'LB', 'NLB', 'Both', 'Total')
 #+end_src
 
 #+RESULTS:
-| types                  | counts |
-|------------------------+--------|
-| static code            |     20 |
-| dynamic code           |      9 |
-| dynamic taint analysis |      1 |
-| static taint analysis  |      2 |
-| static config          |      2 |
-| dynamic config         |      0 |
+| Firmware samples | LB | NLB | Both | Total |
+|------------------+----+-----+------+-------|
+|            <= 10 |  2 |   5 |    2 |     9 |
+|            11-50 |  3 |   2 |    0 |     5 |
+|           51-100 |  0 |   2 |    3 |     5 |
+|          101-500 |  1 |   0 |    0 |     1 |
+|            > 500 |  8 |   2 |    4 |    14 |
+
+#+begin_src R :colnames yes :results output file :file exports/tables/num-samples-binned.tex
+  xtable.opt.table()
+  xtable(res, caption='LB and NLB firmware studies by number of samples ($>$ 500 is considered large-scale).', label='tab:num-samples-binned')
+#+end_src
+
+#+RESULTS:
+[[file:exports/tables/num-samples-binned.tex]]
 
 ***** what kinds of non-Linux architectures are analysed?
-Select only ISA-related columns with some true values:
-
-#+begin_src R :results none
-  nonlinux_archs = nonlinux[, grepl("isa.", colnames(nonlinux))]
-  nonlinux_archs = nonlinux_archs[, sapply(colnames(nonlinux_archs), function(col) any(nonlinux_archs[col]))]
-#+end_src
-
-Check out what architectures we have:
-
-#+begin_src R
-  colnames(nonlinux_archs)
-#+end_src
-
-#+RESULTS:
-| isa.ARM.Cortex.M  |
-| isa.ARM           |
-| isa.RISC.MSP430   |
-| isa.ARMv5         |
-| isa.ARMv4T        |
-| isa.Intel.8051    |
-| isa.ARMv8A        |
-| isa.ARMv5TE       |
-| isa.ARMv7.M.Thumb |
-| isa.ARMv6.M.Thumb |
-| isa.MIPS          |
-| isa.CR816         |
-| isa.AVR           |
-| isa.RISC.custom   |
-| isa.AARCH64       |
-| isa.PowerPC       |
-| isa.Intel.x86     |
-| isa.Intel.x64     |
-| isa.ARMv7         |
-| isa.ARMv4         |
-
-Group together ARM architecture, keep the rest:
-
-#+begin_src R :results none
-  armcols = grepl('ARM', colnames(nonlinux_archs))
-  hasarm = rowSums(nonlinux_archs[, armcols]) > 0
-  nonlinux_archs = nonlinux_archs[, !armcols]
-  nonlinux_archs$ARM = hasarm
-  colnames(nonlinux_archs) = sub('isa.', '', colnames(nonlinux_archs))
-#+end_src
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
 Count each architecture:
 
 #+begin_src R :colnames yes
-  data.frame(types=colnames(nonlinux_archs), counts=sapply(colnames(nonlinux_archs), FUN=function(col) { sum(nonlinux_archs[, col]) }))
+  counts = read_tsv('exports/corpus2.tsv') %>%
+    filter(fw_types != 'linux') %>%
+    select(item,isa) %>%
+    separate_longer_delim(isa, ',') %>%
+    mutate(isa=if_else(str_detect(isa, '^ARM'), 'ARM', isa)) %>%
+    distinct(item,isa) %>%
+    count(isa) %>%
+    rename(`Architecture`=isa, `Count`=n)
 #+end_src
 
 #+RESULTS:
-| types       | counts |
-|-------------+--------|
-| RISC.MSP430 |      2 |
-| Intel.8051  |      2 |
-| MIPS        |      5 |
-| CR816       |      1 |
-| AVR         |      1 |
-| RISC.custom |      1 |
-| AARCH64     |      1 |
-| PowerPC     |      2 |
-| Intel.x86   |      3 |
-| Intel.x64   |      1 |
-| ARM         |     21 |
+| Architecture | Count |
+|--------------+-------|
+| AARCH64      |     1 |
+| ARM          |    17 |
+| AVR          |     1 |
+| Intel-8051   |     2 |
+| Intel-x64    |     1 |
+| Intel-x86    |     4 |
+| MIPS         |     6 |
+| PowerPC      |     2 |
+| RISC-MSP430  |     2 |
+| RISC-V       |     1 |
 
-***** how many of the non-Linux papers have available data?
+#+begin_src R :colnames yes :results output file :file exports/tables/nlb-archs.tex
+  xtable.opt.table()
+  xtable(counts, caption='Number of NLB firmware studies by CPU architecture.', label='tab:nlb-archs')
+#+end_src
+
+#+RESULTS:
+[[file:exports/tables/nlb-archs.tex]]
+
+***** what's the median number of analysed architectures?
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+Select only ISA-related columns with some true values:
+
 #+begin_src R
-  nonlinux$dataset_is_present = nonlinux$dataset != "unavailable"
-  table(nonlinux$dataset_is_present)
+  archs = read_tsv('exports/corpus2.tsv') %>%
+    filter(fw_types != 'linux') %>%
+    select(item,isa) %>%
+    separate_longer_delim(isa, ',') %>%
+    mutate(isa=if_else(str_detect(isa, '^ARM'), 'ARM', isa)) %>%
+    distinct(item,isa) %>%
+    count(item)
 #+end_src
 
 #+RESULTS:
-| FALSE | 19 |
-| TRUE  |  9 |
+| clements: halucinator: firmware re-hosting through abstraction layer emulation   | 1 |
+| costin: Large-scale analysis of Security of Embedded Firmware                    | 2 |
+| davidson: fie on firmware: finding vulnerabilities in embedded systems using symbolic execution | 1 |
+| eschweiler: discovre: efficient cross-architecture identification of bugs in binary code | 4 |
+| feng: Scalable Graph-based Bug Search for Firmware Images                        | 3 |
+| feng: p2im: scalable and hardware-independent firmware testing via automatic peripheral interface modeling | 4 |
+| fowze: proxray: protocol model learning and guided firmware analysis             | 2 |
+| gritti: heapster: analyzing the security of dynamic allocators for monolithic firmware images | 1 |
+| gustafson: toward the analysis of embedded firmware through automated re-hosting | 1 |
+| hernandez: firmusb: vetting usb device firmware using domain informed symbolic execution | 1 |
+| muench: what you corrupt is not what you crash: challenges in fuzzing embedded devices | 1 |
+| pewny: cross-architecture bug search in binary executables                       | 3 |
+| redini: Karonte: Detecting insecure multi-binary interactions in embedded firmware | 3 |
+| redini: bootstomp: on the security of bootloaders in mobile devices              | 1 |
+| shirani: binarm: scalable and efficient detection of vulnerabilities in firmware images of intelligent electronic devices | 1 |
+| shoshitaishvili: firmalice - automatic detection of authentication bypass vulnerabilities in binary firmware | 2 |
+| wen: FirmXRay: Detecting Bluetooth Link Layer Vulnerabilities From Bare-Metal Firmware | 1 |
+| zaddach: avatar: a framework to support dynamic security analysis of embedded systems' firmwares | 1 |
+| zhao: a large-scale empirical analysis of the vulnerabilities introduced by third-party components in iot firmware | 3 |
+| zhu: a methodology for determining the image base of arm-based industrial control system <U+FB01>rmware | 1 |
 
+#+begin_src R :results none
+  write_result(median(archs$n), 'median-num-nonlinux-archs')
+#+end_src
+
+***** for LB studies, what firmware retrieval methods are used?
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+#+begin_src R :colnames yes
+  read_tsv('exports/corpus2.tsv') %>%
+    filter(fw_types == 'linux') %>%
+    select(scraping_approaches) %>%
+    separate_longer_delim(scraping_approaches, ',') %>%
+    count(scraping_approaches) %>%
+    mutate(scraping_approaches=case_match(
+             scraping_approaches,
+             'app-store' ~ 'App store',
+             'custom-search' ~ 'Custom web search',
+             'direct-approach' ~ 'Direct extraction',
+             'existing-dataset' ~ 'Existing dataset',
+             'own-generation' ~ 'Manual generation',
+             'unknown' ~ 'Unknown',
+             'user-submission' ~ 'User submission',
+             'vendor-website' ~ 'Vendor website',
+             'FTP' ~ 'FTP')) %>%
+    rename(`Scraping approach`=scraping_approaches, `Counts`=n)
+#+end_src
+
+#+RESULTS:
+| Scraping approach | Counts |
+|-------------------+--------|
+| FTP               |      1 |
+| Existing dataset  |      1 |
+| Unknown           |      3 |
+| Vendor website    |     11 |
+
+***** for NLB studies, what firmware retrieval methods are used?
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+#+begin_src R :colnames yes
+  read_tsv('exports/corpus2.tsv') %>%
+    separate_longer_delim(fw_types, ",") %>%
+    filter(fw_types == 'non-linux') %>%
+    select(scraping_approaches) %>%
+    separate_longer_delim(scraping_approaches, ',') %>%
+    count(scraping_approaches) %>%
+    mutate(scraping_approaches=case_match(
+             scraping_approaches,
+             'app-store' ~ 'App store',
+             'custom-search' ~ 'Custom web search',
+             'direct-approach' ~ 'Direct extraction',
+             'existing-dataset' ~ 'Existing dataset',
+             'own-generation' ~ 'Manual generation',
+             'unknown' ~ 'Unknown',
+             'user-submission' ~ 'User submission',
+             'vendor-website' ~ 'Vendor website',
+             'FTP' ~ 'FTP')) %>%
+    rename(`Scraping approach`=scraping_approaches, `Counts`=n)
+#+end_src
+
+#+RESULTS:
+| Scraping approach | Counts |
+|-------------------+--------|
+| FTP               |      4 |
+| App store         |      1 |
+| Custom web search |      2 |
+| Direct extraction |      1 |
+| Existing dataset  |      4 |
+| Manual generation |      3 |
+| Unknown           |      3 |
+| User submission   |      2 |
+| Vendor website    |     13 |
+
+***** what kinds of non-Linux devices are most often analysed?
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+#+begin_src R :colnames yes
+  device_nums = read_tsv('exports/corpus2.tsv') %>%
+    separate_longer_delim(fw_types, ',') %>%
+    filter(fw_types == 'non-linux') %>%
+    select(devices_sector) %>%
+    separate_longer_delim(devices_sector, ',') %>%
+    count(devices_sector) %>%
+    mutate(devices_sector=case_match(
+             devices_sector,
+             'IoT' ~ 'IoT',
+             'computer-peripherals'~'Computer peripherals',
+             'industrial'~'Industrial',
+             'medical'~'Medical',
+             'personal'~'Personal',
+             'other'~'Other')) %>%
+    rename(`Device sector`=devices_sector, Count=n)
+#+end_src
+
+#+RESULTS:
+| Device sector        | Count |
+|----------------------+-------|
+| IoT                  |    13 |
+| Computer peripherals |     4 |
+| Industrial           |     5 |
+| Medical              |     2 |
+| Other                |     6 |
+| Personal             |     6 |
+
+#+begin_src R :colnames yes :results output file :file exports/tables/nlb-device-sectors.tex
+  xtable.opt.table()
+  xtable(device_nums, caption='Number of NLB studies by device sector.', label='tab:nlb-device-sectors')
+#+end_src
+
+#+RESULTS:
+[[file:exports/tables/nlb-device-sectors.tex]]
+
+***** for NLB studies, what is analysed and how?
+#+begin_src R :colnames yes
+  res = read_tsv("exports/corpus2.tsv") %>%
+    select(item, fw_types, analyses, whats_analysed) %>%
+    separate_longer_delim(fw_types, ',') %>%
+    filter(fw_types == 'non-linux') %>%
+    filter(!is.na(analyses) & !is.na(whats_analysed)) %>%
+    separate_longer_delim(whats_analysed, ',') %>%
+    separate_longer_delim(analyses, ',') %>%
+    count(analyses, whats_analysed) %>%
+    pivot_wider(names_from=analyses, values_from=n, values_fill=0) %>%
+    select(whats_analysed, static, dynamic, `symbolic-execution`, taint) %>%
+    rename(`Analysis focus`=whats_analysed,
+           Static=static, Dynamic=dynamic,
+           `Symb. exec.`=`symbolic-execution`,
+           Taint=taint) %>%
+    mutate(`Analysis focus`=case_match(
+             `Analysis focus`,
+             "code" ~ "Code",
+             "config" ~ "Configuration",
+             "credentials" ~ "Credentials",
+             "interfaces" ~ "Interfaces"))
+#+end_src
+
+#+RESULTS:
+| Analysis focus | Static | Dynamic | Symb. exec. | Taint |
+|----------------+--------+---------+-------------+-------|
+| Code           |     12 |       5 |           6 |     2 |
+| Interfaces     |      0 |       3 |           1 |     0 |
+| Configuration  |      2 |       0 |           0 |     0 |
+| Credentials    |      1 |       0 |           0 |     0 |
+
+#+begin_src R :colnames yes :results output file :file exports/tables/nlb-analyses.tex
+  xtable.opt.table()
+  xtable(res, caption='Number of studies of NLB firmware by analysis methods and analysis focus.', label='tab:nlb-analyses')
+#+end_src
+
+#+RESULTS:
+[[file:exports/tables/nlb-analyses.tex]]
 
 ** Papers
 :PROPERTIES:
@@ -903,7 +563,39 @@ Count each architecture:
 :VISIBILITY: folded
 :END:
 *** Non-linux
-**** DONE [#1] wen: FirmXRay: Detecting Bluetooth Link Layer Vulnerabilities From Bare-Metal Firmware
+**** large
+***** [#1] gritti: heapster: analyzing the security of dynamic allocators for monolithic firmware images
+:PROPERTIES:
+:NOTER_DOCUMENT: papers/gritti2022heapster.pdf
+:P_analyses: static
+:P_analyses+: symbolic-execution
+:P_fw_types: non-linux
+:P_scraping_approaches: existing-dataset
+:P_whats_analysed: code
+:P_n_scraped: 804
+:P_n_analysed: 804
+:P_isa:    ARM
+:P_dataset: linked
+:P_devices: "wearable, upgrade tool, others, sensor, medical devices, bike accessory, smart eyeglasses, tracker, switch, car accessory, robot, smart lock, smart light, battery, smart home, game accessory, agricultural equipment, thermometer, beacon, firearm accessory, headphone, alarm"
+:P_devices_sector: personal
+:P_devices_sector+: other
+:P_devices_sector+: IoT
+:P_devices_sector+: medical
+:P_devices_sector+: industrial
+:Effort:   0:05
+:END:
+#+begin_src bibtex
+  @inproceedings{gritti2022heapster,
+    title     = {{HEAPSTER: Analyzing the Security of Dynamic Allocators for Monolithic Firmware Images}},
+    author    = {Gritti, Fabio and Pagani, Fabio and Grishchenko, Ilya and Dresel, Lukas and Redini, Nilo and Kruegel, Christopher and Vigna, Giovanni},
+    booktitle = {Proceedings of the IEEE Symposium on Security \& Privacy (S\&P)},
+    month     = {May},
+    year      = {2022}
+  }
+#+end_src
+[[elisp:org-noter][Open document]]
+
+***** [#1] wen: FirmXRay: Detecting Bluetooth Link Layer Vulnerabilities From Bare-Metal Firmware
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/wen2020firmxray.pdf
 :ID:       764144F2-D0EB-4D42-80EA-7A5909793CD6
@@ -913,117 +605,33 @@ Count each architecture:
 :P_whats_analysed: code
 :P_whats_analysed+: config
 :P_n_scraped: 793
-:P_n_analysed: unknown
-:P_dataset: https://github.com/OSUSecLab/FirmXRay/tree/master/dataset
+:P_n_analysed: 793
+:P_dataset: available-direct
 :P_devices: "wearable, sensor, tag, robot, medical device, others"
 :P_devices_sector: personal
-:P_devices_sector+: iot
+:P_devices_sector+: IoT
 :P_devices_sector+: medical
 :P_devices_sector+: other
 :P_isa: ARM-Cortex-M
 :END:
 #+begin_src bibtex
-@Article{2020,
-  author       = {Wen, Haohuang and Lin, Zhiqiang and Zhang, Yinqian},
-  title        = {FirmXRay: Detecting Bluetooth Link Layer
-                  Vulnerabilities From Bare-Metal Firmware},
-  journal      = {Proceedings of the 2020 ACM SIGSAC Conference on
-                  Computer and Communications Security},
-  year         = 2020,
-  month        = {Oct},
-  doi          = {10.1145/3372297.3423344},
-  url          = {http://dx.doi.org/10.1145/3372297.3423344},
-  publisher    = {ACM}
-}
+  @Article{wen2020firmxray,
+    author       = {Wen, Haohuang and Lin, Zhiqiang and Zhang, Yinqian},
+    title        = {FirmXRay: Detecting Bluetooth Link Layer
+                    Vulnerabilities From Bare-Metal Firmware},
+    journal      = {Proceedings of the 2020 ACM SIGSAC Conference on
+                    Computer and Communications Security},
+    year         = 2020,
+    month        = {Oct},
+    doi          = {10.1145/3372297.3423344},
+    url          = {http://dx.doi.org/10.1145/3372297.3423344},
+    publisher    = {ACM}
+  }
 #+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: BLE often used, could contain many vulnerabilities, this tool can detect them.
-
-static analysis, bare-metal firmware.
-BLE firmware.
-analyses data structures, configurations
-evaluated on firmware extracted from mobile apps.
-793 images. various iot devices, but also batteries, keyboards, etc.
-
-published at ACM CCS.
-
-***** 1 Introduction
-:PROPERTIES:
-:NOTER_PAGE: (1 . 0.709049)
-:END:
-contributions:
-- first automated static analysis tool to detect BLE vulnerabilities from configurations of bare-metal firmware
-- new algorithm to recognise base address and identify/resolve configurations
-- collecting images from mobile apps
-- evaluation discovered configuration security issues
-***** 3 Overview
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.782432)
-:END:
-****** 3.1 Threat Model, Scope, and Assumptions
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.799765)
-:END:
-- nearby attackers can compromise devices at BLE link layer
-- can sniff packets during broadcast/transmission and perform MITM attacks
-- focus on attacks at link layer: identity tracking, active MITM (modifying), passive MITM (reading)
-
-assume ARM Cortex-M, not obfuscated, no ASLR, firmware destributed OTA via mobile app
-
-***** 4 Detailed Design
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.588715)
-:END:
-****** 4.1 Robust Firmware Disassembling
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.606048)
-:END:
-- code starts from customized base, which has to be identified for pointers to resolve correctly
-- existing approaches rely on function prologues, which might give wrong results
-- authors use constraint solving: associate constraints between pointers and their targets, and solve them to infer base address
-****** 4.2 Precise Data Structure Recognition
-:PROPERTIES:
-:NOTER_PAGE: (6 . 0.764119)
-:END:
-- no matter where data structures defined in memory, they will be taken as parameters by SDK functions
-- use vendor-specific knowledge to identify SDK functions and establish signatures of function invocation points
-  - gathered manually
-****** 4.3 Configuration Value Resolution
-:PROPERTIES:
-:NOTER_PAGE: (7 . 0.48022)
-:END:
-Steps:
-1. configuration path extraction: figure out program path with instructions involved in generating config values (backward slicing)
-2. config value generation: based on paths, execute each instruction forwards to generate the concrete values
-3. vuln detection: focus on SDK functions, look for specified vulnerabilities
-***** 5 Evaluation
-:PROPERTIES:
-:NOTER_PAGE: (8 . 0.583215)
-:END:
-****** 5.1 Experiment Setup
-:PROPERTIES:
-:NOTER_PAGE: (8 . 0.709903)
-:END:
-- bare-metal firmware usually transferred from mobile apps, so apps should be ale to download them
-- crawled 2 million free apps from Google Play
-- selected those using BLE via API filtering, obtained 135,486 apps
-- unpacked APKs and extracted Nordic & TI firmware (easily distinguished via magic bytes)
-- final: 793 unique samples
-- categorised via SDK functions and manually
-****** 5.2 Experiment Results
-:PROPERTIES:
-:NOTER_PAGE: (9 . 0.467835)
-:END:
-- 98.1% random static MAC addresses, 71.5% just works pairing, 98.5% insecure key exchange
-***** 6 Discussion
-:PROPERTIES:
-:NOTER_PAGE: (11 . 0.774571)
-:END:
-- there may be other firmware not obtained in this study, e.g. downloaded from servers
-- can be adapted to other SDKs and architectures
-- challenge of confirming vulns because static analysis only.
-**** DONE [#1] clements: halucinator: firmware re-hosting through abstraction layer emulation
+**** small
+***** [#1] clements: halucinator: firmware re-hosting through abstraction layer emulation
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/clements2020halucinator.pdf
 :P_analyses: dynamic
@@ -1038,147 +646,23 @@ Steps:
 :P_devices_sector: other
 :P_dataset: unavailable
 :END:
+#+begin_src bibtex
+  @inproceedings {clements2020halucinator,
+  author = {Abraham A Clements and Eric Gustafson and Tobias Scharnowski and Paul Grosen and David Fritz and Christopher Kruegel and Giovanni Vigna and Saurabh Bagchi and Mathias Payer},
+  title = {{HALucinator}: Firmware Re-hosting Through Abstraction Layer Emulation},
+  booktitle = {29th USENIX Security Symposium (USENIX Security 20)},
+  year = {2020},
+  isbn = {978-1-939133-17-5},
+  pages = {1201--1218},
+  url = {https://www.usenix.org/conference/usenixsecurity20/presentation/clements},
+  publisher = {USENIX Association},
+  month = aug,
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: tight coupling between hardware/firmware makes it hard to do dynamic analysis. this uses something like hardware abstraction layers to decouple hardware from firmware.
 
-target blob firmware, i.e. without OS.
-evaluate on 16 firmware samples, compiled manually.
-emulate, then fuzz interfaces.
-
-
-***** Skeleton
-****** Introduction
-:PROPERTIES:
-:NOTER_PAGE: (2 . 0.781491)
-:END:
-- emulating binary firmware on QEMU without relying on presence of hardware
-- use abstraction libraries (HALs), already provided by vendors for embedded platforms
-- HALucinator: emulation system for itneractive emulation and fuzzing
-****** Motivation
-- microcontroller manufacturers develop HALs to make them more attractive to developers
-- single HAL covers family of microcontrollers
-:PROPERTIES:
-:NOTER_PAGE: (4 . 0.593612)
-:END:
-******* Emulating Hardware and Peripherals
-:PROPERTIES:
-:NOTER_PAGE: (4 . 0.793138)
-:END:
-******* The Firmware Stack
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.415133)
-:END:
-******* High-Level Emulation
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.383067)
-:END:
-****** Design
-:PROPERTIES:
-:NOTER_PAGE: (6 . 0.274717)
-:END:
-******* Prerequisites
-:PROPERTIES:
-:NOTER_PAGE: (6 . 0.810018)
-:END:
-******* LibMatch
-:PROPERTIES:
-:NOTER_PAGE: (6 . 0.732085)
-:END:
-******* High-level Emulation
-:PROPERTIES:
-:NOTER_PAGE: (7 . 0.717895)
-:END:
-******* Fuzzing with HALucinator
-:PROPERTIES:
-:NOTER_PAGE: (8 . 0.399138)
-:END:
-****** Implementation
-:PROPERTIES:
-:NOTER_PAGE: (9 . 0.488538)
-:END:
-****** Evaluation
-:PROPERTIES:
-:NOTER_PAGE: (10 . 0.305909)
-:END:
-******* Library Identification in Binaries
-:PROPERTIES:
-:NOTER_PAGE: (10 . 0.340771)
-:END:
-******* Scaling of High-Level Emulation
-:PROPERTIES:
-:NOTER_PAGE: (11 . 0.090909)
-:END:
-******* Interactive Emulation Comparison
-:PROPERTIES:
-:NOTER_PAGE: (12 . 0.700878)
-:END:
-******* Fuzzing with HALucinator
-:PROPERTIES:
-:NOTER_PAGE: (13 . 0.853938)
-:END:
-****** Related Work
-:PROPERTIES:
-:NOTER_PAGE: (14 . 0.171487)
-:END:
-****** Limitations and Discussion
-:PROPERTIES:
-:NOTER_PAGE: (15 . 0.231867)
-:END:
-- the firmware has to use a HAL, which must be available to analyst
-- QEMU must support architecture
-- handlers and peripheral models required for each HAL
-- effectiveness of LibMatch limited in relation to compiler-induced variations in generated code
-****** Conclusion
-:PROPERTIES:
-:NOTER_PAGE: (16 . 0.090909)
-:END:
-****** Appendix
-:PROPERTIES:
-:NOTER_PAGE: (19 . 0.090909)
-:END:
-******* Code Complexity Metrics
-:PROPERTIES:
-:NOTER_PAGE: (19 . 0.120061)
-:END:
-******* Evaluation of P2IM Firmware Samples
-:PROPERTIES:
-:NOTER_PAGE: (19 . 0.470676)
-:END:
-
-**** DONE [#1] cui: when firmware modifications attack: a case study of embedded exploitation
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/cui2013whenfirmware.pdf
-:P_analyses: static
-:P_fw_types: non-linux
-:P_scraping_approaches: direct-approach
-:P_scraping_approaches+: vendor-website
-:P_whats_analysed: code
-:P_isa:    ARM
-:P_dataset: unavailable
-:P_devices: printers
-:P_devices_sector: IoT
-:P_n_analysed: 373
-:END:
-[[elisp:org-noter][Open document]]
-
-rationale: firmware can be upated, here's how the update mechanism can be exploited to inject malware
-
-look specifically at a printer.
-non-linux, uses VxWorks.
-static analysis of code.
-directly extracted firmware from device.
-
-published at ndss.
-
-***** HP LaserJet exploitation
-- reverse engineer RFU file
-- create VxWorks rootkit
-
-***** Scanning for vulnerable printers
-- scan IPv4 address space for publicly accesible printers
-- found 90,847 accessible printers, only 1.08% of them patched against the HP-RFU attack
-**** DONE [#1] davidson: fie on firmware: finding vulnerabilities in embedded systems using symbolic execution
+***** [#1] davidson: fie on firmware: finding vulnerabilities in embedded systems using symbolic execution
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/davidson2013fie.pdf
 :P_analyses: symbolic-execution
@@ -1193,27 +677,27 @@ published at ndss.
 :P_devices_sector+: computer-peripherals
 :P_isa:    RISC-MSP430
 :P_dataset: unavailable
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @inproceedings {davidson2013fie,
+  author = {Drew Davidson and Benjamin Moench and Thomas Ristenpart and Somesh Jha},
+  title = {{FIE} on Firmware: Finding Vulnerabilities in Embedded Systems Using Symbolic Execution},
+  booktitle = {22nd USENIX Security Symposium (USENIX Security 13)},
+  year = {2013},
+  isbn = {978-1-931971-03-4},
+  address = {Washington, D.C.},
+  pages = {463--478},
+  url = {https://www.usenix.org/conference/usenixsecurity13/technical-sessions/paper/davidson},
+  publisher = {USENIX Association},
+  month = aug,
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: existing code analysis tools don't work well fo rfirmware programs because of architectural features of low-power platforms. this should be extensible platform for bug etection in firmware for MSP430 microcontrollers.
 
-these microcontrollers used in various iot devices.
-gathered 99 firmware programs.
-scraped from vendor site, github search
-symbolic execution based on Klee
-only non-Linux I think, only really mentions Contiki
 
-- first open source tool for automated security analysis of fw for MSP430 microcontrollers
-- explroation of state pruning and memory smudging to enhance coverage of symbex
-- verified memory safety on 53 open-source fw programs
-
-***** Limitations
-- some fw have intractably large number of reachable states, so can't do complete analysis
-- possible discrepancies between symbolic execution and native execution in deployment
-- due to peripherals and interrupts, FIE may explore states that don't arise in real execution, leading to false positives in errors
-- fails on inline assembly
-**** DONE [#1] feng: p2im: scalable and hardware-independent firmware testing via automatic peripheral interface modeling
+***** [#1] feng: p2im: scalable and hardware-independent firmware testing via automatic peripheral interface modeling
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/feng2020p2im.pdf
 :P_analyses: dynamic
@@ -1226,18 +710,28 @@ only non-Linux I think, only really mentions Contiki
 :P_devices: "self-balancing robot, industrial programmable logic controller, gateway device, drone, CNC port of Grbl milling controller, commercial reflow oven, console for RIOT OS, steering control for self driving vehicle, soldering iron, industrial heat press"
 :P_devices_sector: other
 :P_devices_sector+: industrial
-:P_dataset: https://github.com/RiS3-Lab/p2im-real_firmware/
+:P_dataset: available-direct
+:Effort:   0:05
+:P_isa+:    AVR
+:P_isa+: MIPS
+:P_isa+: RISC-V
 :END:
+#+begin_src bibtex
+  @inproceedings {feng2020p2im,
+  author = {Bo Feng and Alejandro Mera and Long Lu},
+  title = {{P2IM}: Scalable and Hardware-independent Firmware Testing via Automatic Peripheral Interface Modeling},
+  booktitle = {29th USENIX Security Symposium (USENIX Security 20)},
+  year = {2020},
+  isbn = {978-1-939133-17-5},
+  pages = {1237--1254},
+  url = {https://www.usenix.org/conference/usenixsecurity20/presentation/feng},
+  publisher = {USENIX Association},
+  month = aug,
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: dynamic testing/fuzzing of fw limited by hardware-dependence and shitty scalability. this is a framework that continuously execs fw binary while channeling inputs from a fuzzer.
-
-evaluated on 80 fw total. iot & components.
-
-did dynamic analysis, fuzzing (so interfaces)
-looks like only non-linux.
-code is from github, looks like provided by vendors
-**** DONE [#1] zaddach: avatar: a framework to support dynamic security analysis of embedded systems' firmwares
+***** [#1] zaddach: avatar: a framework to support dynamic security analysis of embedded systems' firmwares
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/zaddach2014avatar.pdf
 :P_analyses: dynamic
@@ -1253,45 +747,24 @@ code is from github, looks like provided by vendors
 :P_devices_sector: computer-peripherals
 :P_devices_sector+: IoT
 :P_devices_sector+: personal
-:P_dataset: unavailable
+:P_dataset: available-direct
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @inproceedings{zaddach2014avatar,
+  author = {Zaddach, Jonas and Bruno, Luca and Francillon, Aurélien and Balzarotti, Davide},
+  year = {2014},
+  month = {02},
+  pages = {},
+  title = {Avatar: A Framework to Support Dynamic Security Analysis of Embedded Systems’ Firmwares},
+  isbn = {1-891562-35-5},
+  doi = {10.14722/ndss.2014.23229}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: research in fw analysis hindered by lack of dedicated tools. this is a framework enabling dynamic analysis of embedded by orechstrating execution of emulator together with real hardware.
-uses symbolic execution.
-analyze a hard drive, zigbee iot, digital baseban.
-mostly code execution analysis i think.
-seems like non-linux.
-3 different things analysed.
-**** DONE [#1] gritti: heapster: analyzing the security of dynamic allocators for monolithic firmware images
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/gritti2022heapster.pdf
-:P_analyses: static
-:P_analyses+: symbolic-execution
-:P_fw_types: non-linux
-:P_scraping_approaches: existing-dataset
-:P_whats_analysed: code
-:P_n_scraped: 819
-:P_n_analysed: 819
-:P_isa:    ARM
-:P_dataset: https://github.com/seemoo-lab/fitness-firmware
-:P_devices: "wearable, upgrade tool, others, sensor, medical devices, bike accessory, smart eyeglasses, tracker, switch, car accessory, robot, smart lock, smart light, battery, smart home, game accessory, agricultural equipment, thermometer, beacon, firearm accessory, headphone, alarm"
-:P_devices_sector: personal
-:P_devices_sector+: other
-:P_devices_sector+: IoT
-:P_devices_sector+: medical
-:P_devices_sector+: industrial
-:END:
-[[elisp:org-noter][Open document]]
 
-rationale: dynamic memory allocators used extensively, can be vulnerable. this is a system that automatically identifies heap library used by monolithic fw image, tests its security using symbex and bounded model checking.
-monolithic = non-linux
-
-static analysis & symbex of code.
-
-819 images from existing dataset.
-generally iot stuff.
-**** DONE [#1] hernandez: firmusb: vetting usb device firmware using domain informed symbolic execution
+***** [#1] hernandez: firmusb: vetting usb device firmware using domain informed symbolic execution
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/hernandez2017firmusb.pdf
 :P_analyses: static
@@ -1302,20 +775,35 @@ generally iot stuff.
 :P_n_analysed: 2
 :P_n_scraped: 2
 :P_isa:    Intel-8051
-:P_dataset: http://ezhid.sourceforge.net/sunkbd.html
+:P_dataset: available-partial
 :P_devices: "Phison 2251-03 controller, EzHID keyboard for Cypress EZ-USB"
 :P_devices_sector: computer-peripherals
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @inproceedings{hernandez2017firmusb,
+          doi = {10.1145/3133956.3134050},
+
+          url = {https://doi.org/10.1145%2F3133956.3134050},
+
+          year = 2017,
+          month = {oct},
+
+          publisher = {{ACM}
+  },
+
+          author = {Grant Hernandez and Farhaan Fowze and Dave (Jing) Tian and Tuba Yavuz and Kevin R.B. Butler},
+
+          title = {{FirmUSB}},
+
+          booktitle = {Proceedings of the 2017 {ACM} {SIGSAC} Conference on Computer and Communications Security}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
 rationale: impossible to know if USB device benign or malicious. this is fw analysis framework using omain knowledge of USB protocol to analyze fw images
 
-static and symbolic analysis.
-analyse code.
-evaluate on to firmware images.
-usb controllers so internal-components.
-use original firmware from vendors but then manually adjust it.
-**** DONE [#1] redini: bootstomp: on the security of bootloaders in mobile devices
+***** [#1] redini: bootstomp: on the security of bootloaders in mobile devices
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/redini2017bootstomp.pdf
 :P_analyses: static
@@ -1328,38 +816,29 @@ use original firmware from vendors but then manually adjust it.
 :P_n_scraped: 5
 :P_n_analysed: 5
 :P_isa:    ARMv8A
-:P_dataset: https://github.com/ucsb-seclab/BootStomp/tree/master/bootloaders
+:P_dataset: available-direct
 :P_devices: "Huawei P8 lite phone, Sony Xperia XA phone, Nexu 9 tablet"
 :P_devices_sector: personal
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @inproceedings {redini2017bootstomp,
+  author = {Nilo Redini and Aravind Machiry and Dipanjan Das and Yanick Fratantonio and Antonio Bianchi and Eric Gustafson and Yan Shoshitaishvili and Christopher Kruegel and Giovanni Vigna},
+  title = {{BootStomp}: On the Security of Bootloaders in Mobile Devices},
+  booktitle = {26th USENIX Security Symposium (USENIX Security 17)},
+  year = {2017},
+  isbn = {978-1-931971-40-9},
+  address = {Vancouver, BC},
+  pages = {781--798},
+  url = {https://www.usenix.org/conference/usenixsecurity17/technical-sessions/presentation/redini},
+  publisher = {USENIX Association},
+  month = aug,
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: bootloaders can be disabled/unlocked. traditional analysis on bootloaders is problematic because of hw dependencies and complexity+opacity of code. this paper explores vulnerabilities in mobile bootloaders.
 
-bootstomp does both static and dynamic symbolic execution for taint analysis. so tracking code execution.
-5 different bootloaders.
-
-**** DONE [#2] zaddach: implementation an implications of a stealth hard-drive backdoor
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/zaddach2013implementation.pdf
-:P_analyses: static
-:P_analyses+: dynamic
-:P_fw_types: non-linux
-:P_scraping_approaches: direct-approach
-:P_whats_analysed: code
-:P_n_scraped: 1
-:P_n_analysed: 1
-:P_isa:    ARMv5TE
-:P_devices: HDD
-:P_devices_sector: computer-peripherals
-:P_dataset: unavailable
-:END:
-[[elisp:org-noter][Open document]]
-
-rationale: hard disks implicitly trusted. this shows what happens when they shouldn't be.
-
-non-linux. just a single fw. firmware dumped directly. static and dynamic analysis of code.
-**** DONE [#2] gustafson: toward the analysis of embedded firmware through automated re-hosting
+***** [#2] gustafson: toward the analysis of embedded firmware through automated re-hosting
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/gustafson2019toward.pdf
 :P_analyses: dynamic
@@ -1373,144 +852,29 @@ non-linux. just a single fw. firmware dumped directly. static and dynamic analys
 :P_devices_sector: IoT
 :P_isa:    ARMv7-M-Thumb
 :P_isa+:    ARMv6-M-Thumb
-:P_dataset: https://github.com/ucsb-seclab/pretender/tree/master/test_programs
+:P_dataset: available-direct
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @inproceedings {gustafson2019toward,
+  author = {Eric Gustafson and Marius Muench and Chad Spensky and Nilo Redini and Aravind Machiry and Yanick Fratantonio and Davide Balzarotti and Aur{\'e}lien Francillon and Yung Ryn Choe and Christophe Kruegel and Giovanni Vigna},
+  title = {Toward the Analysis of Embedded Firmware through Automated Re-hosting},
+  booktitle = {22nd International Symposium on Research in Attacks, Intrusions and Defenses (RAID 2019)},
+  year = {2019},
+  isbn = {978-1-939133-07-6},
+  address = {Chaoyang District, Beijing},
+  pages = {135--150},
+  url = {https://www.usenix.org/conference/raid2019/presentation/gustafson},
+  publisher = {USENIX Association},
+  month = sep,
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: firmware re-hosting -- virtual execution of firmware.
 
-eval on 6 example fw. vendor website & manual generation.
-dynamic analysis
-fw samples include mimic of door lock controller and thermostat, so iot
-
-**** DONE [#3] delugre: closer to metal: reverse-engineering the broadcom netextreme's firmware
+***** [#3] fowze: proxray: protocol model learning and guided firmware analysis
 :PROPERTIES:
-:NOTER_DOCUMENT: papers/delugre2011closer.pdf
-:P_analyses: static
-:P_analyses+: dynamic
-:P_fw_types: non-linux
-:P_scraping_approaches: direct-approach
-:P_whats_analysed: code
-:P_n_scraped: 1
-:P_n_analysed: 1
-:P_isa:    MIPS
-:P_devices: "network interface card"
-:P_devices_sector: computer-peripherals
-:P_dataset: unavailable
-:END:
-[[elisp:org-noter][Open document]]
-
-analysing network interface card.
-directly dump firmware from userland.
-static & dynamic analysis of code
-non-linux
-**** DONE [#3] miller: battery firmware hacking
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/miller2019battery.pdf
-:P_analyses: static
-:P_analyses+: dynamic
-:P_fw_types: non-linux
-:P_scraping_approaches: direct-approach
-:P_whats_analysed: code
-:P_devices: battery
-:P_devices_sector: computer-peripherals
-:P_isa:    CR816
-:P_dataset: unavailable
-:END:
-[[elisp:org-noter][Open document]]
-
-smart battery analysis.
-static and dynamic analysis of code
-just the one fw sample.
-manual extraction of firmware.
-
-**** DONE [#3] maskiewicz: mouse trap: exploiting firmware updates in usb peripherals
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/maskiewicz2014mousetrap.pdf
-:P_analyses: static
-:P_fw_types: non-linux
-:P_scraping_approaches: vendor-website
-:P_whats_analysed: code
-:P_n_scraped: 1
-:P_n_analysed: 1
-:P_isa:    AVR
-:P_devices: "Logitech G600 mouse"
-:P_devices_sector: computer-peripherals
-:P_dataset: unavailable
-:END:
-[[elisp:org-noter][Open document]]
-
-rationale: often fw update capabilities not authenticated, allowing infection with malware. this is a case study showing an attack on a mouse.
-
-firmware obtained from logitech website. static analysis of code. one sample.
-probably non-linux, it has its own bootloader and stuff.
-**** DONE [#3] basnight: firmware modification attacks on programmable logic controllers
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/basnight2013firmware.pdf
-:P_analyses: static
-:P_whats_analysed: code
-:P_scraping_approaches: vendor-website
-:P_fw_types: non-linux
-:P_n_analysed: 1
-:P_n_scraped: 1
-:P_devices: "programmable logic controller"
-:P_devices_sector: industrial
-:P_isa:    ARM
-:P_dataset: unavailable
-:END:
-[[elisp:org-noter][Open document]]
-
-examines vulnerability of PLC to intentional firmware modification
-
-PLC (programmable logic controller) is embedded device programmed to manage and control phyical components based on system inputs an requirements
-
-evaluation was on firmware obtained from manufacturer
-analysis: manual code inspection, code comparison, file and filesystem analysis
-analysed only 1 specific image
-not sure if linux or not.
-
-non-linux because no filesystem detected.
-**** DONE [#3] chapman: hacking into internet connected light bulbs
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/chapman2014hacking.pdf
-:P_analyses: static
-:P_fw_types: non-linux
-:P_scraping_approaches: direct-approach
-:P_whats_analysed: code
-:P_whats_analysed+: credentials
-:P_devices: "internet-connected light bulb"
-:P_devices_sector: IoT
-:P_isa:    ARMv7-M-Thumb
-:P_dataset: unavailable
-:END:
-[[elisp:org-noter][Open document]]
-
-Investigates network-connected light bulb.
-Directly extracted firmware from device. 1 sample.
-Analysed code, credentials.
-
-STM32F205ZG based on Cortex-M3, so non-linux.
-**** DONE [#3] chen: reversing and exploiting an apple firmware update
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/chen2009reversing.pdf
-:P_analyses: static
-:P_fw_types: non-linux
-:P_scraping_approaches: vendor-website
-:P_whats_analysed: code
-:P_isa:    RISC-custom
-:P_devices: "apple keyboard"
-:P_devices_sector: computer-peripherals
-:P_dataset: unavailable
-:END:
-[[elisp:org-noter][Open document]]
-
-rationale: exist bad security practices for upgrade mechanisms. here, show how to tamper with firmware upgrade to Apple keyboard
-
-obtained fw from vendor site, just the 1 sample
-static analysis of code.
-**** DONE [#3] fowze: proxray: protocol model learning and guided firmware analysis
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/fowze2020proxray.pdf
+:NOTER_DOCUMENT: papers/fowze2021proxray.pdf
 :P_analyses: symbolic-execution
 :P_fw_types: non-linux
 :P_scraping_approaches: vendor-website
@@ -1522,16 +886,25 @@ static analysis of code.
 :P_devices: "USB communication device class, USB human interface device class, USB mass storage class"
 :P_devices_sector: computer-peripherals
 :P_dataset: unavailable
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @ARTICLE{fowze2021proxray,
+    author =       {Fowze, Farhaan and Tian, Dave and Hernandez, Grant
+                    and Butler, Kevin and Yavuz, Tuba},
+    journal =      {IEEE Transactions on Software Engineering},
+    title =        {ProXray: Protocol Model Learning and Guided Firmware
+                    Analysis},
+    year =         2021,
+    volume =       47,
+    number =       9,
+    pages =        {1907-1928},
+    doi =          {10.1109/TSE.2019.2939526}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-published in IEEE Transactions on Software Engineering
-
-rationale: lots of manual effort required to study comm protocols and rev eng fw. this does nalysis using symbolic execution that can learn a protocol model from known fw and apply it to unknown fw.
-
-evaluate 29 images. obtained from vendors.
-
-**** DONE [#3] zhu: a methodology for determining the image base of arm-based industrial control system ﬁrmware
+***** [#3] zhu: a methodology for determining the image base of arm-based industrial control system ﬁrmware
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/zhu2017methodology.pdf
 :P_analyses: static
@@ -1544,17 +917,35 @@ evaluate 29 images. obtained from vendors.
 :P_devices_sector: industrial
 :P_isa:    ARM
 :P_dataset: unavailable
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @article{zhu2017methodology,
+  title = {A methodology for determining the image base of ARM-based
+                    industrial control system firmware},
+  journal = {International Journal of Critical Infrastructure
+                    Protection},
+  volume = 16,
+  pages = {26-35},
+  year = 2017,
+  issn = {1874-5482},
+  doi = {https://doi.org/10.1016/j.ijcip.2016.12.002},
+  url =
+                    {https://www.sciencedirect.com/science/article/pii/S1874548216300014},
+  author = {Ruijin Zhu and Baofeng Zhang and Junjie Mao and Quanxin
+                    Zhang and Yu-an Tan},
+  keywords = {Industrial Control Systems, ARM Architecture, Firmware,
+                    Image Base, Reverse Engineering}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: for industrial control system firmware, hard to otain image base of firmware. this paper shows how to automatically determine image base.
-static analysis of code of images.
-evaluated on 10 samples of firmware. collected from vendors.
 
 *** Both
-**** DONE [#1] costin: Large-scale analysis of Security of Embedded Firmware
+**** large
+***** [#1] costin: Large-scale analysis of Security of Embedded Firmware
 :PROPERTIES:
-:NOTER_DOCUMENT: papers/costin2014largescale.pdf
+:NOTER_DOCUMENT: papers/costin2014large.pdf
 :P_analyses: static
 :P_scraping_approaches: vendor-website
 :P_scraping_approaches+: FTP
@@ -1572,7 +963,10 @@ evaluated on 10 samples of firmware. collected from vendors.
 :P_devices_sector: personal
 :P_devices_sector+: IoT
 :P_devices_sector+: industrial
-:P_dataset: http://firmware.re/usenixsec14/
+:P_dataset: available-direct
+:Effort:   0:05
+:P_pct_lb: 86
+:P_pct_nlb: 14
 :END:
 #+begin_src bibtex
   @inproceedings {costin2014large,
@@ -1591,45 +985,7 @@ evaluated on 10 samples of firmware. collected from vendors.
 
 [[elisp:org-noter][Open document]]
 
-general internet-connected devices.
-scraped 172,751 images, analysed 32356 images.
-static analysis.
-obtained from vendor sites and by user submission, custom search engines
-cracked password hashes, looked for shared credentials and shared self-signed certs, analysed configuration of web servers
-both linux and non-linux.
-
-
-**** DONE [#1] redini: Karonte: Detecting insecure multi-binary interactions in embedded firmware
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/redini2020karonte.pdf
-:P_analyses: static
-:P_analyses+: taint
-:P_whats_analysed: code
-:P_n_scraped: 952
-:P_n_analysed: unknown
-:P_fw_types: linux
-:P_fw_types+: non-linux
-:P_scraping_approaches: vendor-website
-:P_scraping_approaches+: existing-dataset
-:P_isa:    ARM
-:P_isa+:    AARCH64
-:P_isa+: PowerPC
-:P_dataset: https://github.com/ucsb-seclab/karonte
-:P_devices: "IoT, Huawei phone, Nvidia tablet"
-:P_devices_sector: IoT
-:P_devices_sector+: personal
-:END:
-
-[[elisp:org-noter][Open document]]
-
-rationale: existing devices use multiple binaries, current analysis approaches are insufficient.
-Karonte is a static analysis approach to model and track multi-binary interactions.
-
-uses static taint analysis, so also analyses code.
-
-evaluted on iot firmware (scraped from official vendors, 49 samples) and bootstomp existing dataset. also firmadyne's dataset, 899 samples.
-
-**** DONE [#1] feng: Scalable Graph-based Bug Search for Firmware Images
+***** [#1] feng: Scalable Graph-based Bug Search for Firmware Images
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/feng2016scalable.pdf
 :P_analyses: static
@@ -1647,83 +1003,194 @@ evaluted on iot firmware (scraped from official vendors, 49 samples) and bootsto
 :P_isa+:    Intel-x86
 :P_devices: "IP cameras, routers, access points, various IoT"
 :P_devices_sector: IoT
-:P_dataset: unavailable
+:P_dataset: linked
+:Effort:   0:05
 :END:
-
+#+begin_src bibtex
+  @inproceedings{feng2016scalable,
+  title = "Scalable graph-based bug search for firmware images",
+  keywords = "Firmware security, Graph encoding, Machine learning",
+  author = "Qian Feng and Rundong Zhou and Chengcheng Xu and Yao Cheng and Brian Testa and Heng Yin",
+  year = "2016",
+  month = oct,
+  day = "24",
+  doi = "10.1145/2976749.2978370",
+  language = "English (US)",
+  series = "Proceedings of the ACM Conference on Computer and Communications Security",
+  publisher = "Association for Computing Machinery",
+  pages = "480--491",
+  booktitle = "CCS 2016 - Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security",
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: control flow graph based bug search is not scalable for large number of devices
-
-new bug search scheme.
-
-uses baseline evaluation set (manually generated), two public fw images, 33,045 images, vulnerability dataset
-
-scraped 33045 images, from vendor site and ftp. analysed 8126 images.
-
-uses CFG to analyse -- i.e. basic building blocks, so code.
-
-the firmware is from both linux and non-linux i think. they use a firmware with some ReadyNAS OS, don't know if that's linux-based. but some of the existing datasets have non-linux firmware.
-**** DONE [#1] eschweiler: discovre: efficient cross-architecture identification of bugs in binary code
+***** [#3] shirani: binarm: scalable and efficient detection of vulnerabilities in firmware images of intelligent electronic devices
 :PROPERTIES:
-:NOTER_DOCUMENT: papers/eschweiler2016discovre.pdf
+:NOTER_DOCUMENT: papers/shirani2018binarm.pdf
 :P_analyses: static
+:P_scraping_approaches: vendor-website
+:P_scraping_approaches+: FTP
+:P_whats_analysed: code
+:P_n_analysed: 5756
+:P_fw_types: linux
+:P_fw_types+: non-linux
+:P_isa:    ARM
+:P_devices: "intelligent electronic devices in smart grid"
+:P_devices_sector: IoT
+:P_dataset: unavailable
+:Effort:   0:05
+:P_pct_lb: 90
+:P_pct_nlb: 10
+:END:
+#+begin_src bibtex
+  @inproceedings{shirani2018binarm,
+    author = {Paria Shirani and
+                 Leo Collard and
+                 Basile L. Agba and
+                 Bernard Lebel and
+                 Mourad Debbabi and
+                 Lingyu Wang and
+                 Aiman Hanna},
+    editor = {Cristiano Giuffrida and
+                 S{\'{e}}bastien Bardin and
+                 Gregory Blanc},
+    title = {{BINARM:} Scalable and Efficient Detection of
+                    Vulnerabilities in Firmware
+                 Images of Intelligent Electronic Devices},
+    booktitle = {Detection of Intrusions and Malware, and Vulnerability
+                    Assessment
+                 - 15th International Conference, {DIMVA} 2018, Saclay,
+                    France, June
+                 28-29, 2018, Proceedings},
+    series = {Lecture Notes in Computer Science},
+    volume = 10885,
+    pages = {114--138},
+    publisher = {Springer},
+    year = 2018,
+    url = {https://doi.org/10.1007/978-3-319-93411-2\_6},
+    doi = {10.1007/978-3-319-93411-2\_6},
+    timestamp = {Tue, 14 May 2019 10:00:47 +0200},
+    biburl = {https://dblp.org/rec/conf/dimva/ShiraniCALD0H18.bib},
+    bibsource = {dblp computer science bibliography, https://dblp.org}
+  }
+#+end_src
+[[elisp:org-noter][Open document]]
+
+***** [#1] zhao: a large-scale empirical analysis of the vulnerabilities introduced by third-party components in iot firmware
+:PROPERTIES:
+:NOTER_DOCUMENT: papers/zhao2022largescale.pdf
+:P_fw_types: linux
+:P_fw_types+: non-linux
+:P_whats_analysed: code
+:P_scraping_approaches: user-submission
+:P_scraping_approaches+: FTP
+:P_scraping_approaches+: vendor-website
+:P_analyses: static
+:P_n_scraped: 34136
+:P_n_analysed: 32817
+:P_dataset: available-direct
+:P_devices: "camera, router, unknown, switch, sweeper, light, general, plugin, heater, bluetooth light, air, curtain, lock, freezer, air purifier, humidifier, dehumidifier, heat controller, fan, washer, gateway, others"
+:P_devices_sector: IoT
+:P_devices_sector+: industrial
+:P_isa:    ARM
+:P_isa+:   Intel-x86
+:P_isa+:   MIPS
+:Effort:   0:05
+:P_pct_nlb: 63.8
+:P_pct_lb: 36.2
+:END:
+#+begin_src bibtex
+  @inproceedings{zhao2022largescale,
+  author = {Zhao, Binbin and Ji, Shouling and Xu, Jiacheng and Tian, Yuan and Wei, Qiuyang and Wang, Qinying and Lyu, Chenyang and Zhang, Xuhong and Lin, Changting and Wu, Jingzheng and Beyah, Raheem},
+  title = {A Large-Scale Empirical Analysis of the Vulnerabilities Introduced by Third-Party Components in IoT Firmware},
+  year = {2022},
+  isbn = {9781450393799},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3533767.3534366},
+  doi = {10.1145/3533767.3534366},
+  booktitle = {Proceedings of the 31st ACM SIGSOFT International Symposium on Software Testing and Analysis},
+  pages = {442–454},
+  numpages = {13},
+  keywords = {Third-party component, Vulnerability, IoT firmware},
+  location = {Virtual, South Korea},
+  series = {ISSTA 2022}
+  }
+#+end_src
+[[elisp:org-noter][Open document]]
+
+**** small
+***** [#1] redini: Karonte: Detecting insecure multi-binary interactions in embedded firmware
+:PROPERTIES:
+:NOTER_DOCUMENT: papers/redini2020karonte.pdf
+:P_analyses: static
+:P_analyses+: taint
+:P_whats_analysed: code
+:P_n_scraped: 952
+:P_n_analysed: 53
 :P_fw_types: linux
 :P_fw_types+: non-linux
 :P_scraping_approaches: vendor-website
-:P_whats_analysed: code
-:P_n_analysed: 2
-:P_n_scraped: 2
-:P_isa:    Intel-x86
-:P_isa+:    Intel-x64
-:P_isa+:    ARMv7
-:P_isa+:    MIPS
-:P_dataset: unavailable
-:P_devices: "Router firmware DD-WRT, Netgreat ReadyNAS"
+:P_scraping_approaches+: existing-dataset
+:P_isa:    ARM
+:P_isa+:    AARCH64
+:P_isa+: PowerPC
+:P_dataset: available-direct
+:P_devices: "IoT, Huawei phone, Nvidia tablet"
 :P_devices_sector: IoT
+:P_devices_sector+: personal
+:Effort:   0:05
+:P_pct_lb: 92.5
+:P_pct_nlb: 7.5
 :END:
+#+begin_src bibtex
+  @inproceedings{redini2020karonte,
+  author = {Redini, Nilo and Machiry, Aravind and Wang, Ruoyu and Spensky, Chad and Continella, Andrea and Shoshitaishvili, Yan and Kruegel, Christopher and Vigna, Giovanni},
+  year = {2020},
+  month = {05},
+  pages = {1544-1561},
+  title = {Karonte: Detecting Insecure Multi-binary Interactions in Embedded Firmware},
+  doi = {10.1109/SP40000.2020.00036}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: existing approaches to find bugs in binary code use dynamic analysis (hard for fw), or handle only single architecture, or use semantic similarity (slow for large code bases). this is efficient function similarity search in binaries based on structure of their CFGs, starting from known vulnerable function.
-
-so analyze code, statically.
-firmware analyze: Linux-based router fw DD-WRT, Netgear ReadyNAS. so 2 samples. obtained from vendor.
-
-**** DONE [#1] muench: what you corrupt is not what you crash: challenges in fuzzing embedded devices
+***** [#1] muench: what you corrupt is not what you crash: challenges in fuzzing embedded devices
 :PROPERTIES:
-:NOTER_DOCUMENT: papers/muench2018whatyoucorrupt.pdf
+:NOTER_DOCUMENT: papers/muench2018what.pdf
 :P_analyses: dynamic
 :P_fw_types: linux
 :P_fw_types+: non-linux
 :P_scraping_approaches: unknown
 :P_whats_analysed: code
 :P_whats_analysed+: interfaces
-:P_n_analysed: 3
-:P_n_scraped: 3
+:P_n_analysed: 4
+:P_n_scraped: 4
 :P_devices: "single board computer, router, IP camera, development board"
 :P_devices_sector: other
 :P_devices_sector+: IoT
 :P_isa:    ARMv7
 :P_isa+:    ARMv4
 :P_isa+:    ARMv7-M-Thumb
-:P_dataset: unavailable
+:P_dataset: available-direct
+:Effort:   0:05
+:P_pct_lb: 75
+:P_pct_nlb: 25
 :END:
 #+begin_src bibtex
-  @inproceedings{muench2018what,
-  title={What You Corrupt Is Not What You Crash: Challenges in Fuzzing Embedded Devices},
-  author={Marius Muench and Jan Stijohann and Frank Kargl and Aur{\'e}lien Francillon and Davide Balzarotti},
-  booktitle={NDSS},
-  year={2018}
-}
-
+  @conference{muench2018what,
+    author = {Muench, Marius and  Stijohann, Jan and  Kargl, Frank and  Francillon, Aurélien and  Balzarotti, Davide},
+    title = {What you corrupt is not what you crash: Challenges in fuzzing embedded devices},
+    booktitle = {NDSS 2018, Network and Distributed Systems Security Symposium, 18-21 February 2018, San Diego, CA, USA},
+    year = {2018},
+    editor = {ISOC},
+    address = {San Diego},
+    note = {© ISOC. Personal use of this material is permitted. The definitive version of this paper was published in NDSS 2018, Network and Distributed Systems Security Symposium, 18-21 February 2018, San Diego, CA, USA and is available at : http://dx.doi.org/10.14722/NDSS.2018.23166},
+  }
 #+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: show that memory corruptions often result in different behavior on embedded systems than on desktop, so effectiveness of traditional dynamic testing techniques (such as fuzzing) is lower.
-analysis of both linux and non-linux.
-mostly iot devices.
-dynamic testing. code and interfaces. unspecified where firmware was obtained.
-
-**** DONE [#1] shoshitaishvili: firmalice - automatic detection of authentication bypass vulnerabilities in binary firmware
+***** [#1] shoshitaishvili: firmalice - automatic detection of authentication bypass vulnerabilities in binary firmware
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/shoshitaishvili2015firmalice.pdf
 :P_analyses: static
@@ -1739,16 +1206,32 @@ dynamic testing. code and interfaces. unspecified where firmware was obtained.
 :P_isa: ARM
 :P_isa+: PowerPC
 :P_dataset: unavailable
+:Effort:   0:05
+:P_pct_nlb: 66
+:P_pct_lb: 33
 :END:
+#+begin_src bibtex
+  @inproceedings{shoshitaishvili2015firmalice,
+    author    = {Yan Shoshitaishvili and
+                 Ruoyu Wang and
+                 Christophe Hauser and
+                 Christopher Kruegel and
+                 Giovanni Vigna},
+    title     = {Firmalice - Automatic Detection of Authentication Bypass Vulnerabilities
+                 in Binary Firmware},
+    booktitle = {22nd Annual Network and Distributed System Security Symposium, {NDSS}
+                 2015, San Diego, California, USA, February 8-11, 2015},
+    publisher = {The Internet Society},
+    year      = {2015},
+    url       = {https://www.ndss-symposium.org/ndss2015/firmalice-automatic-detection-authentication-bypass-vulnerabilities-binary-firmware},
+    timestamp = {Mon, 01 Feb 2021 08:42:25 +0100},
+    biburl    = {https://dblp.org/rec/conf/ndss/Shoshitaishvili15.bib},
+    bibsource = {dblp computer science bibliography, https://dblp.org}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: binary analysis framework to suport analysing fw on embedded devices.
-built on symbolic execution engine.
-evaluate on 3 fw samples.
-static analysis, symbolic execution.
-evaluate against 3 iot devices. both linux and non-linux.
-unspecified how fw was retrieved, probably from vendor though.
-**** DONE [#1] pewny: cross-architecture bug search in binary executables
+***** [#1] pewny: cross-architecture bug search in binary executables
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/pewny2015crossarchitecture.pdf
 :P_analyses: static
@@ -1764,69 +1247,63 @@ unspecified how fw was retrieved, probably from vendor though.
 :P_devices: "router firmware DD-WRT, Netgear ReadyNAS"
 :P_devices_sector: IoT
 :P_dataset: unavailable
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @INPROCEEDINGS{pewny2015crossarchitecture,
+    author={Pewny, Jannik and Garmany, Behrad and Gawlik, Robert and Rossow, Christian and Holz, Thorsten},
+    booktitle={2015 IEEE Symposium on Security and Privacy},
+    title={Cross-Architecture Bug Search in Binary Executables},
+    year={2015},
+    volume={},
+    number={},
+    pages={709-724},
+    doi={10.1109/SP.2015.49}}
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: existing bug finding methods fall short (on source code req, or architecture limit, or dynamic analysis). this paper has system to derive bug signatures for known bugs.
-
-static analysis of code to find similar code.
-
-60 images, linux and non-linux. retrieval unknown.
-iot devices (routers).
-**** DONE [#3] costin: embedded devices security and firmware reverse engineering
+***** [#1] eschweiler: discovre: efficient cross-architecture identification of bugs in binary code
 :PROPERTIES:
-:NOTER_DOCUMENT: papers/costin2013embedded.pdf
+:NOTER_DOCUMENT: papers/eschweiler2016discovre.pdf
 :P_analyses: static
-:P_analyses+: dynamic
 :P_fw_types: linux
 :P_fw_types+: non-linux
 :P_scraping_approaches: vendor-website
+:P_scraping_approaches+: existing-dataset
 :P_whats_analysed: code
-:P_n_analysed: 2
-:P_n_scraped: 2
-:P_devices: "Seagate HDD, Vicon IPCAM 960"
-:P_devices_sector: computer-peripherals
-:P_devices_sector+: IoT
-:P_dataset: http://www.seagate.com/staticfiles/support/downloads/firmware/MooseDT-MX1A-3D4D-DMax22.iso
-:P_isa:    ARM
-:END:
-[[elisp:org-noter][Open document]]
-
-rationale: workshop to show quick-start for inspecting firmwares
-
-analyse seagate HDD, vicon ipcam. just 2.
-static analysis and dynamic analysis.
-both linux and non-linux i think.
-
-**** DONE [#3] shirani: binarm: scalable and efficient detection of vulnerabilities in firmware images of intelligent electronic devices
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/shirani2018binarm.pdf
-:P_analyses: static
-:P_scraping_approaches: vendor-website
-:P_scraping_approaches+: FTP
-:P_whats_analysed: code
-:P_n_analysed: 5756
-:P_fw_types: linux
-:P_fw_types+: non-linux
-:P_isa:    ARM
-:P_devices: "intelligent electronic devices in smart grid"
-:P_devices_sector: IoT
+:P_n_analysed: 62
+:P_n_scraped: 62
+:P_isa:    Intel-x86
+:P_isa+:    Intel-x64
+:P_isa+:    ARMv7
+:P_isa+:    MIPS
 :P_dataset: unavailable
+:P_devices: "Router firmware DD-WRT, Netgreat ReadyNAS"
+:P_devices_sector: IoT
+:Effort:   0:05
 :END:
+#+begin_src bibtex
+  @inproceedings{eschweiler2016discovre,
+    author    = {Sebastian Eschweiler and
+                 Khaled Yakdan and
+                 Elmar Gerhards{-}Padilla},
+    title     = {discovRE: Efficient Cross-Architecture Identification of Bugs in Binary
+                 Code},
+    booktitle = {23rd Annual Network and Distributed System Security Symposium, {NDSS}
+                 2016, San Diego, California, USA, February 21-24, 2016},
+    publisher = {The Internet Society},
+    year      = {2016},
+    url       = {http://wp.internetsociety.org/ndss/wp-content/uploads/sites/25/2017/09/discovre-efficient-cross-architecture-identification-bugs-binary-code.pdf},
+    timestamp = {Thu, 17 Jun 2021 16:04:48 +0200},
+    biburl    = {https://dblp.org/rec/conf/ndss/EschweilerYG16.bib},
+    bibsource = {dblp computer science bibliography, https://dblp.org}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
-
-rationale: many intelligent electric devices, any vulnerabilities have big effect. existing detection techniques lack domain knowledge or efficiency. this is a scalable approach for finding vulnerable functions in IED firmware.
-
-static analysis of code.
-fw scraped from ftp, vendor sites, manual.
-firmware database: extracted 2628 images.
-
-for evaluation, extracted 5756 for analysis.
-
-Linux is the most encountered oper- ating system in our ﬁrmware dataset, with 90% of frequency amongst others, such as Windows.
 
 *** Only linux
-**** chen: Towards Automated Dynamic Analysis for Linux-based Embedded Firmware
+**** large
+***** [#1] chen: Towards Automated Dynamic Analysis for Linux-based Embedded Firmware
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/chen2016towards.pdf
 :P_analyses: dynamic
@@ -1836,234 +1313,23 @@ Linux is the most encountered oper- ating system in our ﬁrmware dataset, with 
 :P_n_scraped: 23035
 :P_n_analysed: 9486
 :P_whats_analysed: interfaces
+:P_isa:    ARM MIPS
+:P_devices_sector: IoT
+:P_dataset: available-partial
 :END:
-
+#+begin_src bibtex
+  @inproceedings{chen2016towards,
+  author = {Chen, Daming and Egele, Manuel and Woo, Maverick and Brumley, David},
+  year = {2016},
+  month = {01},
+  pages = {},
+  title = {Towards Automated Dynamic Analysis for Linux-based Embedded Firmware},
+  doi = {10.14722/ndss.2016.23415}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: existing approaches for vulnerability identification not scalable due to large variety of embedded devices.
-
-FIRMADYNE: automated dynamic analysis system for Linux-based firmware on network-connected commodity devices.
-- software-based full system emulation
-- instrumented kernel
-
-scraped 23035 images, 9486 extracted
-***** Overview
-:PROPERTIES:
-:NOTER_PAGE: (2 . 0.581742)
-:END:
-****** Components
-:PROPERTIES:
-:NOTER_PAGE: (2 . 0.65696)
-:END:
-******* Crawling Firmware
-:PROPERTIES:
-:NOTER_PAGE: (2 . 0.711423)
-:END:
-- Web crawler downloads images from vendor sites
-  - support for 42 vendors
-  - manually created parsing templates for each site
-- crawled vendor's FTP site
-  (add-hook 'org-noter-notes-mode-hook (lambda () (message "YEP")))
-******* Extract Firmware Filesystem
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.402158)
-:END:
-******* Initial Emulation
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.460229)
-:END:
-******* Dynamic Analysis
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.647655)
-:END:
-****** Motivation
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.131574)
-:END:
-******* Application-Level
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.259341)
-:END:
-******* Process-Level
-:PROPERTIES:
-:NOTER_PAGE: (3 . 0.654706)
-:END:
-******* System-Level
-:PROPERTIES:
-:NOTER_PAGE: (4 . 0.631595)
-:END:
-***** Concept
-:PROPERTIES:
-:NOTER_PAGE: (4 . 0.591968)
-:END:
-****** Architecture
-:PROPERTIES:
-:NOTER_PAGE: (4 . 0.685029)
-:END:
-****** Acquisition
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.163525)
-:END:
-****** Extraction
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.473489)
-:END:
-****** Emulation
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.58186)
-:END:
-****** Automated Analyses
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.109994)
-:END:
-***** Implementation
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.235096)
-:END:
-****** Acquisition
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.30485)
-:END:
-****** Extraction
-:PROPERTIES:
-:NOTER_PAGE: (5 . 0.798128)
-:END:
-****** Emulation
-:PROPERTIES:
-:NOTER_PAGE: (6 . 0.453441)
-:END:
-******* NVRAM
-:PROPERTIES:
-:NOTER_PAGE: (6 . 0.472062)
-:END:
-******* Kernel
-:PROPERTIES:
-:NOTER_PAGE: (7 . 0.236755)
-:END:
-******* System Configuration
-:PROPERTIES:
-:NOTER_PAGE: (8 . 0.454422)
-:END:
-******* QEMU
-:PROPERTIES:
-:NOTER_PAGE: (8 . 0.16765)
-:END:
-****** Automated Analyses
-:PROPERTIES:
-:NOTER_PAGE: (8 . 0.460352)
-:END:
-******* Accessible Webpages
-:PROPERTIES:
-:NOTER_PAGE: (8 . 0.599357)
-:END:
-******* SNMP Information
-:PROPERTIES:
-:NOTER_PAGE: (9 . 0.15379)
-:END:
-******* Vulnerabilities
-:PROPERTIES:
-:NOTER_PAGE: (9 . 0.313102)
-:END:
-****** Additional Capabilities
-:PROPERTIES:
-:NOTER_PAGE: (9 . 0.598297)
-:END:
-***** Evaluation
-:PROPERTIES:
-:NOTER_PAGE: (9 . 0.814307)
-:END:
-****** Statistics
-:PROPERTIES:
-:NOTER_PAGE: (9 . 0.605691)
-:END:
-******* Architectures
-:PROPERTIES:
-:NOTER_PAGE: (10 . 0.067607)
-:END:
-******* Operating Systems
-:PROPERTIES:
-:NOTER_PAGE: (10 . 0.332444)
-:END:
-******* Kernel Modules
-:PROPERTIES:
-:NOTER_PAGE: (10 . 0.486585)
-:END:
-******* Network Services
-:PROPERTIES:
-:NOTER_PAGE: (10 . 0.696072)
-:END:
-******* Emulation Progress
-:PROPERTIES:
-:NOTER_PAGE: (11 . 0.061264)
-:END:
-****** Results
-:PROPERTIES:
-:NOTER_PAGE: (12 . 0.732827)
-:END:
-******* Command Injection (#200, #201, #204–#206, #208)
-:PROPERTIES:
-:NOTER_PAGE: (12 . 0.279423)
-:END:
-******* Buffer Overflow (#203)
-:PROPERTIES:
-:NOTER_PAGE: (12 . 0.568951)
-:END:
-******* Information Disclosure (#207, #209–#214)
-:PROPERTIES:
-:NOTER_PAGE: (12 . 0.786696)
-:END:
-******* Sercomm Configuration Dump (#47)
-:PROPERTIES:
-:NOTER_PAGE: (13 . 0.299275)
-:END:
-******* MiniUPnPd Denial of Service (#56)
-:PROPERTIES:
-:NOTER_PAGE: (13 . 0.527646)
-:END:
-******* OpenSSL ChangeCipherSpec (#64)
-:PROPERTIES:
-:NOTER_PAGE: (13 . 0.790845)
-:END:
-****** Discussion and Limitations
-:PROPERTIES:
-:NOTER_PAGE: (13 . 0.219582)
-:END:
-***** Related Work
-:PROPERTIES:
-:NOTER_PAGE: (14 . 0.068182)
-:END:
-***** Conclusion & Future Work
-:PROPERTIES:
-:NOTER_PAGE: (14 . 0.181163)
-:END:
-***** Appendix
-:PROPERTIES:
-:NOTER_PAGE: (15 . 0.745673)
-:END:
-****** Dataset Breakdown
-:PROPERTIES:
-:NOTER_PAGE: (15 . 0.759622)
-:END:
-
-**** costin: automated dynamic firmware analysis at scale: a case study on embedded web interfaces
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/costin2016automated.pdf
-:P_analyses: static
-:P_analyses+: dynamic
-:P_fw_types: linux
-:P_scraping_approaches: unknown
-:P_whats_analysed: code
-:P_whats_analysed+: config
-:P_whats_analysed+: interfaces
-:END:
-[[elisp:org-noter][Open document]]
-
-rationale: many embeded sytems rely on web interfaces, which represent considerable attack surface. here, fully automated framework to apply dynamic fw analysis scalably for auto vulnerability discovery in fw images.
-look at web interfaces on iot devices.
-select only Linux-based. static and dynamic analysis, of configurationand code and interfaces.
-scraped 1925 images, analyse 488.
-
-**** david: firmup: precise static detection of common vulnerabilities in firmware
+***** [#1] david: firmup: precise static detection of common vulnerabilities in firmware
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/david2018firmup.pdf
 :P_analyses: static
@@ -2072,16 +1338,35 @@ scraped 1925 images, analyse 488.
 :P_whats_analysed: code
 :P_n_scraped: 5000
 :P_n_analysed: 2000
+:Effort:   0:05
+:P_dataset: unavailable
 :END:
+#+begin_src bibtex
+    @inproceedings{david2018firmup,
+    author    = {Yaniv David and
+                 Nimrod Partush and
+                 Eran Yahav},
+    editor    = {Xipeng Shen and
+                 James Tuck and
+                 Ricardo Bianchini and
+                 Vivek Sarkar},
+    title     = {FirmUp: Precise Static Detection of Common Vulnerabilities in Firmware},
+    booktitle = {Proceedings of the Twenty-Third International Conference on Architectural
+                 Support for Programming Languages and Operating Systems, {ASPLOS}
+                 2018, Williamsburg, VA, USA, March 24-28, 2018},
+    pages     = {392--404},
+    publisher = {{ACM}},
+    year      = {2018},
+    url       = {https://doi.org/10.1145/3173162.3177157},
+    doi       = {10.1145/3173162.3177157},
+    timestamp = {Wed, 23 Jun 2021 15:34:31 +0200},
+    biburl    = {https://dblp.org/rec/conf/asplos/DavidPY18.bib},
+    bibsource = {dblp computer science bibliography, https://dblp.org}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-static scalable technique to find CVEs in stripped firmware images.
-crawled images from vendor sites
-got 5000, used 2000.
-analysed code.
-not sure if linux or non-linux.
-
-**** srivastava: firmfuzz: automated iot firmware introspection and analysis
+***** [#3] srivastava: firmfuzz: automated iot firmware introspection and analysis
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/srivastava2019firmfuzz.pdf
 :P_analyses: static
@@ -2093,32 +1378,62 @@ not sure if linux or non-linux.
 :P_whats_analysed+: credentials
 :P_n_analysed: 1013
 :P_n_scraped: 6427
+:Effort:   0:05
+:P_dataset: unavailable
 :END:
+#+begin_src bibtex
+  @article{srivastava2019firmfuzz,
+    title={FirmFuzz: Automated IoT Firmware Introspection and Analysis},
+    author={Prashast Srivastava and Hui Peng and Jiahao Li and Hamed
+                    Okhravi and Howard E. Shrobe and Mathias Payer},
+    journal={Proceedings of the 2nd International ACM Workshop on
+                    Security and Privacy for the Internet-of-Things},
+
+  author = {Srivastava, Prashast and Peng, Hui and Li, Jiahao and
+                    Okhravi, Hamed and Shrobe, Howard and Payer,
+                    Mathias}, year = 2019,
+  month = 11,
+  pages = {15-21},
+  title = {FirmFuzz: Automated IoT Firmware Introspection and Analysis},
+  isbn = {978-1-4503-6838-4},
+  doi = {10.1145/3338507.3358616}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: automated device-independent emulation and dynamic analysis framework for linux-based fw.
-static analysis of code, dynamic of credentials, static taint analysis
-evaluate on 6427 images, 1013 with linux filesystem. scraped from 3 vendor sites.
-**** zheng: firm-afl: high-throughput greybox fuzzing of iot firmware via augmented process emulation
+***** [#1] yu: building embedded systems like it’s 1996
 :PROPERTIES:
-:NOTER_DOCUMENT: papers/zheng2019firmafl.pdf
-:P_analyses: dynamic
+:NOTER_DOCUMENT: papers/yu2022building.pdf
 :P_fw_types: linux
+:Effort:   0:05
+:P_n_scraped: 18020
+:P_n_analysed: 10685
+:P_dataset: linked
 :P_scraping_approaches: vendor-website
-:P_scraping_approaches+: existing-dataset
-:P_whats_analysed: interfaces
-:P_n_scraped: 9493
-:P_n_analysed: 295
 :END:
+#+begin_src bibtex
+  @article{yu2022building,
+    doi = {10.48550/ARXIV.2203.06834},
+
+    url = {https://arxiv.org/abs/2203.06834},
+
+    author = {Yu, Ruotong and Del Nin, Francesca and Zhang, Yuchen and Huang, Shan and Kaliyar, Pallavi and Zakto, Sarah and Conti, Mauro and Portokalidis, Georgios and Xu, Jun},
+
+    keywords = {Cryptography and Security (cs.CR), FOS: Computer and information sciences, FOS: Computer and information sciences},
+
+    title = {Building Embedded Systems Like It's 1996},
+
+    publisher = {arXiv},
+
+    year = {2022},
+
+    copyright = {arXiv.org perpetual, non-exclusive license}
+  }
+
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: fuzzing effective to test for vulnerabilities. this is first high-throughput greybox fuzzer for iot firmware.
-evaled on iot programs, retrieved from vendors. also firmadyne dataset (linux-based iot)
-dynamic analysis of interfaces (fuzzing)
-firmadyne dataset: 288 images used.
-own dataset: 7
-they specify linux-based as a requirement I think: The firmware runs a POSIX-compatible operating system (OS). Fortunately, many IoT firmware images use Linux as the OS hence satisfy this requirement
-**** kim: firmae: towards large-scale emulation of iot firmware for dynamic analysis
+***** [#2] kim: firmae: towards large-scale emulation of iot firmware for dynamic analysis
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/kim2020firmae.pdf
 :P_analyses: dynamic
@@ -2127,31 +1442,30 @@ they specify linux-based as a requirement I think: The firmware runs a POSIX-com
 :P_whats_analysed: code
 :P_n_scraped: 1306
 :P_n_analysed: 1124
+:Effort:   0:05
+:P_dataset: available-direct
 :END:
+#+begin_src bibtex
+  @inproceedings{kim2020firmae,
+  author = {Kim, Mingeun and Kim, Dongkwan and Kim, Eunsoo and Kim, Suryeon and Jang, Yeongjin and Kim, Yongdae},
+  title = {FirmAE: Towards Large-Scale Emulation of IoT Firmware for Dynamic Analysis},
+  year = {2020},
+  isbn = {9781450388580},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3427228.3427294},
+  doi = {10.1145/3427228.3427294},
+  booktitle = {Annual Computer Security Applications Conference},
+  pages = {733–745},
+  numpages = {13},
+  keywords = {Firmware, emulation, embedded device, dynamic analysis},
+  location = {Austin, USA},
+  series = {ACSAC '20}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: existing approaches only emulate small fraction of fw images. this analyzes emulation failure cases in large scale dataset, propose new technique to address them.
-
-collected 1306, analyzed 1124 images of iot (routers).
-dynamic analysis, code execution.
-
-**** thomas: humidify: a tool for hidden functionality detection in firmware
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/thomas2017humidify.pdf
-:P_analyses: static
-:P_fw_types: linux
-:P_scraping_approaches: vendor-website
-:P_whats_analysed: code
-:P_n_scraped: 15438
-:P_n_analysed: 50
-:END:
-[[elisp:org-noter][Open document]]
-
-rationale: semi-automated detection of hidden functionality in COTS embedded device fw.
-static analysis of code.
-Linux-based firmware.
-15438 images, 30 vendors. analyze 50 images.
-**** zhang: CryptoREX: large-scale analysis of cryptographic misuse in IoT
+***** [#2] zhang: CryptoREX: large-scale analysis of cryptographic misuse in IoT
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/zhang2019cryptorex.pdf
 :P_analyses: static
@@ -2161,33 +1475,27 @@ Linux-based firmware.
 :P_whats_analysed: code
 :P_n_scraped: 1327
 :P_n_analysed: 521
+:Effort:   0:05
+:P_dataset: unavailable
 :END:
 #+begin_src bibtex
-@inproceedings {242030,
-author = {Li Zhang and Jiongyi Chen and Wenrui Diao and Shanqing Guo and Jian Weng and Kehuan Zhang},
-title = {{CryptoREX}: Large-scale Analysis of Cryptographic Misuse in {IoT} Devices},
-booktitle = {22nd International Symposium on Research in Attacks, Intrusions and Defenses (RAID 2019)},
-year = {2019},
-isbn = {978-1-939133-07-6},
-address = {Chaoyang District, Beijing},
-pages = {151--164},
-url = {https://www.usenix.org/conference/raid2019/presentation/zhang-li},
-publisher = {USENIX Association},
-month = sep,
-}
+  @inproceedings {zhang2019cryptorex,
+  author = {Li Zhang and Jiongyi Chen and Wenrui Diao and Shanqing Guo and Jian Weng and Kehuan Zhang},
+  title = {{CryptoREX}: Large-scale Analysis of Cryptographic Misuse in {IoT} Devices},
+  booktitle = {22nd International Symposium on Research in Attacks, Intrusions and Defenses (RAID 2019)},
+  year = {2019},
+  isbn = {978-1-939133-07-6},
+  address = {Chaoyang District, Beijing},
+  pages = {151--164},
+  url = {https://www.usenix.org/conference/raid2019/presentation/zhang-li},
+  publisher = {USENIX Association},
+  month = sep,
+  }
 #+end_src
 
 [[elisp:org-noter][Open document]]
 
-rationale: crypto functions can be misused in practice, so this identifies crypto misuse of iot devices
-
-static taint analysis using a custom IR to which code is lifted.
-
-evaluated on 1327 images, of iot evices. analysed 521 images.
-crawling method unspecified. probably vendor site, but not stated.
-
-not specified if firmware has OS abstraction or not.
-**** li: towards fine-grained fingerprinting of firmware in online embedded devices
+***** [#3] li: towards fine-grained fingerprinting of firmware in online embedded devices
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/li2018towards.pdf
 :P_analyses: dynamic
@@ -2196,16 +1504,130 @@ not specified if firmware has OS abstraction or not.
 :P_whats_analysed: interfaces
 :P_n_scraped: 9716
 :P_n_analysed: 5296
+:Effort:   0:05
+:P_dataset: unavailable
 :END:
+#+begin_src bibtex
+  @inproceedings{li2018towards,  author={Li, Qiang and Feng, Xuan and Wang, Raining and Li, Zhi and Sun, Limin},  booktitle={IEEE INFOCOM 2018 - IEEE Conference on Computer Communications},   title={Towards Fine-grained Fingerprinting of Firmware in Online Embedded Devices},   year={2018},  volume={},  number={},  pages={2537-2545},  doi={10.1109/INFOCOM.2018.8486326}}
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: fw often outdated. here, generate fingerprints based on differences between filesystems to identify them.
-crawl from vendor sites.
-dynamically analyse the interfaces of the firmware, they simulate it.
-download 9716 images, iot. analyse 5296.
-only linux-based.
+***** [#2] costin: automated dynamic firmware analysis at scale: a case study on embedded web interfaces
+:PROPERTIES:
+:NOTER_DOCUMENT: papers/costin2016automated.pdf
+:P_analyses: static
+:P_analyses+: dynamic
+:P_fw_types: linux
+:P_scraping_approaches: unknown
+:P_whats_analysed: code
+:P_whats_analysed+: config
+:P_whats_analysed+: interfaces
+:Effort:   0:05
+:P_n_scraped: 1925
+:P_n_analysed: 1580
+:P_dataset: available-direct
+:END:
+#+begin_src bibtex
+  @inproceedings{costin2016automated,
+  author = {Costin, Andrei and Zarras, Apostolis and Francillon, Aurélien},
+  year = {2016},
+  month = {05},
+  pages = {437-448},
+  title = {Automated Dynamic Firmware Analysis at Scale: A Case Study on Embedded Web Interfaces},
+  doi = {10.1145/2897845.2897900},
+  booktitle = {The 11th ACM on Asia Conference on Computer and Communications Security}
+  }
+#+end_src
+[[elisp:org-noter][Open document]]
 
-**** hemel: finding software license violations through binary code clone detection
+**** small
+***** [#1] chen: sharing more and checking less: leveraging common input keywords to detect bugs in embedded systems
+:PROPERTIES:
+:Effort:   0:05
+:NOTER_DOCUMENT: papers/chen2021sharing.pdf
+:P_analyses: static taint
+:P_whats_analysed: interfaces
+:P_fw_types: linux
+:P_isa: x86 ARM MIPS
+:P_devices_sector: IoT
+:P_scraping_approaches: vendor-website
+:P_n_scraped: 39
+:P_dataset: available-direct
+:P_n_analysed: 39
+:END:
+#+begin_src bibtex
+  @inproceedings {chen2021sharing,
+  author = {Libo Chen and Yanhao Wang and Quanpu Cai and Yunfan Zhan and Hong Hu and Jiaqi Linghu and Qinsheng Hou and Chao Zhang and Haixin Duan and Zhi Xue},
+  title = {Sharing More and Checking Less: Leveraging Common Input Keywords to Detect Bugs in Embedded Systems},
+  booktitle = {30th USENIX Security Symposium (USENIX Security 21)},
+  year = {2021},
+  isbn = {978-1-939133-24-3},
+  pages = {303--319},
+  url = {https://www.usenix.org/conference/usenixsecurity21/presentation/chen-libo},
+  publisher = {USENIX Association},
+  month = aug,
+  }
+#+end_src
+[[elisp:org-noter][Open document]]
+***** [#1] zheng: firm-afl: high-throughput greybox fuzzing of iot firmware via augmented process emulation
+:PROPERTIES:
+:NOTER_DOCUMENT: papers/zheng2019firmafl.pdf
+:P_analyses: dynamic
+:P_fw_types: linux
+:P_scraping_approaches: vendor-website
+:P_scraping_approaches+: existing-dataset
+:P_whats_analysed: interfaces
+:P_n_scraped: 9486
+:P_n_analysed: 288
+:Effort:   0:05
+:P_dataset: available-direct
+:END:
+#+begin_src bibtex
+  @inproceedings {zheng2019firmafl,
+  author = {Yaowen Zheng and Ali Davanian and Heng Yin and Chengyu Song and Hongsong Zhu and Limin Sun},
+  title = {{FIRM-AFL}: {High-Throughput} Greybox Fuzzing of {IoT} Firmware via Augmented Process Emulation},
+  booktitle = {28th USENIX Security Symposium (USENIX Security 19)},
+  year = 2019,
+  isbn = {978-1-939133-06-9},
+  address = {Santa Clara, CA},
+  pages = {1099--1114},
+  url = {https://www.usenix.org/conference/usenixsecurity19/presentation/zheng},
+  publisher = {USENIX Association},
+  month = aug,
+  }
+#+end_src
+[[elisp:org-noter][Open document]]
+
+***** [#3] thomas: humidify: a tool for hidden functionality detection in firmware
+:PROPERTIES:
+:NOTER_DOCUMENT: papers/thomas2017humidify.pdf
+:P_analyses: static
+:P_fw_types: linux
+:P_scraping_approaches: vendor-website
+:P_whats_analysed: code
+:P_n_scraped: 15438
+:P_n_analysed: 50
+:Effort:   0:05
+:P_dataset: unavailable
+:END:
+#+begin_src bibtex
+  @inproceedings{thomas2017humidify,
+  title = "HumIDIFy: A Tool for Hidden Functionality Detection in
+                    Firmware",
+  author = "Sam Thomas and Garcia, {Flavio D.} and Tom Chothia",
+  year = 2017,
+  doi = "10.1007/978-3-319-60876-1_13",
+  language = "English",
+  series = "Lecture Notes in Computer Science",
+  publisher = "Springer",
+  pages = "279--300",
+  booktitle = "14th Conference on Detection of Intrusions and Malware \&
+                    Vulnerability Assessment (DIMVA '17), Proceedings",
+  }
+#+end_src
+[[elisp:org-noter][Open document]]
+
+***** [#2] hemel: finding software license violations through binary code clone detection
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/hemel2011finding.pdf
 :P_analyses: static
@@ -2214,14 +1636,21 @@ only linux-based.
 :P_n_scraped: 2
 :P_n_analysed: 2
 :P_fw_types: linux
+:Effort:   0:05
+:P_dataset: unavailable
 :END:
+#+begin_src bibtex
+    @inproceedings{hemel2011finding,
+    title={Finding software license violations through binary code clone detection},
+    author={Armijn Hemel and Karl Trygve Kalleberg and Rob Vermaas and Eelco Dolstra},
+    booktitle={MSR '11},
+    year={2011}
+  }
+#+end_src
+
 [[elisp:org-noter][Open document]]
 
-rationale: softare often violates GPL, and this detects code cloning in binaries.
-
-does static analysis of the code, looking for strings and other things.
-unspecified how firmware was obtained. 2 samples. iot stuff.
-**** gui: firmcorn: vulnerability-oriented fuzzing of iot firmware via optimized virtual execution
+***** [#3] gui: firmcorn: vulnerability-oriented fuzzing of iot firmware via optimized virtual execution
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/gui2020firmcorn.pdf
 :P_analyses: static
@@ -2232,15 +1661,23 @@ unspecified how firmware was obtained. 2 samples. iot stuff.
 :P_whats_analysed+: interfaces
 :P_n_analysed: 11
 :P_n_scraped: 11
+:Effort:   0:05
+:P_dataset: available-direct
 :END:
+#+begin_src bibtex
+  @article{gui2020firmcorn,
+    author={Gui, Zhijie and Shu, Hui and Kang, Fei and Xiong, Xiaobing},
+    journal={IEEE Access},
+    title={FIRMCORN: Vulnerability-Oriented Fuzzing of IoT Firmware via Optimized Virtual Execution},
+    year={2020},
+    volume={8},
+    number={},
+    pages={29826-29841},
+    doi={10.1109/ACCESS.2020.2973043}}
+#+end_src
 [[elisp:org-noter][Open document]]
 
-rationale: large number of iot devices prone to vulns. this is first vuln-oriented fuzzer for iot fw.
-
-does both static and dynamic analysis. code and interfaces
-evaled on 10 iot devices, fw from vendor. fuzz test on one real world iot device.
-
-**** yu: poster: fuzzing iot firmware via multi-stage message generation
+***** [#1] yu: poster: fuzzing iot firmware via multi-stage message generation
 :PROPERTIES:
 :NOTER_DOCUMENT: papers/yu2019poster.pdf
 :P_analyses: dynamic
@@ -2249,117 +1686,30 @@ evaled on 10 iot devices, fw from vendor. fuzz test on one real world iot device
 :P_whats_analysed: interfaces
 :P_n_scraped: 8
 :P_n_analysed: 8
+:Effort:   0:05
+:P_dataset: unavailable
 :END:
+#+begin_src bibtex
+  @inproceedings{yu2019poster,
+    author    = {Bo Yu and
+                 Pengfei Wang and
+                 Tai Yue and
+                 Yong Tang},
+    editor    = {Lorenzo Cavallaro and
+                 Johannes Kinder and
+                 XiaoFeng Wang and
+                 Jonathan Katz},
+    title     = {Poster: Fuzzing IoT Firmware via Multi-stage Message Generation},
+    booktitle = {Proceedings of the 2019 {ACM} {SIGSAC} Conference on Computer and
+                 Communications Security, {CCS} 2019, London, UK, November 11-15, 2019},
+    pages     = {2525--2527},
+    publisher = {{ACM}},
+    year      = {2019},
+    url       = {https://doi.org/10.1145/3319535.3363247},
+    doi       = {10.1145/3319535.3363247},
+    timestamp = {Tue, 10 Nov 2020 20:00:54 +0100},
+    biburl    = {https://dblp.org/rec/conf/ccs/YuWYT19.bib},
+    bibsource = {dblp computer science bibliography, https://dblp.org}
+  }
+#+end_src
 [[elisp:org-noter][Open document]]
-
-rationale: first grey-box fuzzer fo rstateful protocols in iot firmware.
-
-evaluated on 8 iot programs.
-obtained from vendor.
-dynamic analysis of interfaces.
-**** yu: building embedded systems like it’s 1996
-:PROPERTIES:
-:NOTER_DOCUMENT: papers/yu2022building.pdf
-:P_fw_types: linux
-:END:
-[[elisp:org-noter][Open document]]
-
-*** TODO ask Marius if his "wycinwyc" dataset is really unavailable
-*** Other papers
-:NOT_AS_USEFUL_RESOURCES:
-| First author    | Title                                                                                                                                         | Read? |
-| <20>            | <30>                                                                                                                                          |       |
-|-----------------+-----------------------------------------------------------------------------------------------------------------------------------------------+-------|
-| lyne            | uncovering iot vulnerabilities in a cctv camera                                                                                               |       |
-| costin          | hacking printers for fun and profit                                                                                                           |       |
-| blanco          | one firmware to monitor'em all                                                                                                                |       |
-| fasano          | sok: enabling security analyses of embedded systems via rehosting                                                                             |       |
-| muench          | dynamic binary firmware analysis: challenges and solutions                                                                                    |       |
-| alrawi          | sok: security evaluation of home-based iot deployments                                                                                        |       |
-| alrawi          | the betrayal at cloud city: an empirical analysis of cloud-based mobile backends                                                              |       |
-| bailey          | automated classification and analysis of internet malware                                                                                     |       |
-| bass            | results of cmu sei line-funded exploratory new starts projects                                                                                |       |
-| bayer           | scalable, behavior-based malware clustering                                                                                                   |       |
-| celosia         | fingerprinting bluetooth-low-energy evices based on the generic attribute profile                                                             |       |
-| chapman         | alexa, are you listening?                                                                                                                     |       |
-| chen            | brick: a binary tool for run-time detecting and locating integer-based vulnerability                                                          |       |
-| corina          | difuze: interface aware fuzzing for kernel drivers                                                                                            |       |
-| costin          | postscript(um): you've been hacked                                                                                                            |       |
-| cova            | static detection of vulnerabilities in x86 executables                                                                                        |       |
-| das             | uncovering privacy leakage in ble network traffic of wearable fitness trackers                                                                |       |
-| dewey           | static detection of c++ vtable escape vulnerabilities in binary code                                                                          |       |
-| egele           | blanket execution: dynamic similarity testing for program binaries and components                                                             |       |
-| faragher        | location fingerprinting with bluetooth low energy beacons                                                                                     |       |
-| fawaz           | protecting privacy of ble device users                                                                                                        |       |
-| haller          | dowsing for overflows: a guided fuzzer to find buffer boundary violations                                                                     |       |
-| hdmoore         | security flaws in universal plug and play: unplug, don't play                                                                                 |       |
-| heninger        | mining your ps and qs: detection of widespread weak keys in network devices                                                                   |       |
-| khan            | a comparative study of white box, black box and grey box testing techniques                                                                   |       |
-| korolova        | cross-app tracking via nearby bluetooth low energy devices                                                                                    |       |
-| larochelle      | statically detecting likely buffer overflow vulnerabilities                                                                                   |       |
-| ming            | taintpipe: pipelined symbolic taint analysis                                                                                                  |       |
-| neugschwandtner | the borg: nanoprobing binaries for buffer overreads                                                                                           |       |
-| qin             | lift: a low-overhead practical information flow tracking system for detecting security attacks                                                |       |
-| rawat           | offset-aware mutation based fuzzing for buffer overflow vulnerabilities: few preliminary results                                              |       |
-| rawat           | vuzzer: application-aware evolutionary fuzzing                                                                                                |       |
-| rosa            | bypassing passkey authentication in bluetooth low energy                                                                                      |       |
-| ryan            | bluetooth: with low energy comes low security                                                                                                 |       |
-| sivakumaran     | a study of the feasibility of co-located app attacks against ble and large-scale analysis of the current application-layer security landscape |       |
-| song            | periscope: an effective probing and fuzzing framework for the hardware-os boundary                                                            |       |
-| stephens        | driller: augmenting fuzzing through selective symbolic execution                                                                              |       |
-| ur              | the current state of access control for smart devices in homes                                                                                |       |
-| wang            | intscope: automatically detecting integer overflow vulnerability in x86 binary using symbolic execution                                       |       |
-| wang            | rpfuzzer: a framework for discovering router protocols vulnerabilities based on fuzzing                                                       |       |
-| weinmann        | baseband attacks: remote exploitation of memory corruptions in cellular protocol stacks                                                       |       |
-| xu              | neural network-based graph embedding for cross-platform binary code similarity detection                                                      |       |
-| zegeye          | exploiting bluetooth low energy pairing vulnerability in telemedicine                                                                         |       |
-| zhang           | breaking secure pairing of bluetooth low energy using downgrade attacks                                                                       |       |
-| zhang           | understanding iot security through the data crystal ball: where we are now and where we are going to be                                       |       |
-| zhu             | tainteraser: protecting sensitive data leaks using application-level taint tracking                                                           |       |
-| zuo             | automatic fingerprinting of vulnerable ble iot devices with static uuids from mobile apps                                                     |       |
-| zuo             | why does your data leak? uncovering the data leakage in cloud from mobile apps                                                                |       |
-| bojinov         | embedded management interfaces: emerging massive insecurity                                                                                   |       |
-| bojinov         | xcs: cross channel scripting and its impact on web applications                                                                               |       |
-| bonkoski        | illuminating the security issues surrounding lights-out server management                                                                     |       |
-| chen            | iotfuzzer: discovering memory corruptions in iot through app-based fuzzing                                                                    |       |
-| cui             | a quantitative analysis of the insecurity of embedded network devices: results of a wide-area scan                                            |       |
-| cui             | brave new world: pervasive insecurity of embedded network devices                                                                             |       |
-| duflot          | what if you can't trust your network card?                                                                                                    |       |
-| feist           | statically detecting use after free on binary code                                                                                            |       |
-| kemerlis        | libdft: practical dynamic data flow tracking for commodity systems                                                                            |       |
-| koscher         | surrogates: enabling near-real-time dynamic analyses of embedded systems                                                                      |       |
-| li              | k-hunt: pinpointing insecure cryptographic keys from execution traces                                                                         |       |
-| li              | femu: a firmware-based emulation framework for soc verification                                                                               | y     |
-| liu             | vulnerability analysis for x86 executables using genetic algorithm and fuzzing                                                                |       |
-
-:END:
-** Other info
-*** Categorisation
-- type of analysis (mult.): static, dynamic, symbolic-execution (something in between), taint (can be static or dynamic)
-- what is analysed (mult.): code, data, config, credentials, interfaces
-  - interfaces are for communication with 'outside world'. so web interfaces, ports, protocols, etc.
-- firmware types (one): linux, non-linux (includes OS abstractions other than Linux, bare-metal, etc.), unknown
-- device types (mult.): iot, unknown, peripherals, internal-components
-  - where iot includes any internet-connected devices that are not a general-purpose computer
-  - internal-components is anything that's not standalone. so also PLCs
-- scraping approaches (mult.): vendor website, FTP, custom search, user submission, existing dataset, app store, direct approach (e.g. manual extraction), unknown, generating the samples themselves
-- dataset not available means author(s) did not provide the exact data that they used (their version)
-*** Lit. study instructions
-- systematic ovrview of state-of-the-art within a particular topic area
-  - categorize papers in a sensible way
-  - compare: approaches, benefits, drawbacks, advances
-- cite 30-40 papers
-- omit implementation details that are irrelevant for comparison
-- approach:
-  - skim through papers, looking only at most important parts to understand approaches/techniques/threat models, etc.
-  - identify key distinguishing factors for each paper
-  - choose main dimension(s) along which to categorize papers
-  - finding more papers:
-    - look for better/additional keywords in papers
-    - look for those cited in related work section (and bibliography)
-    - look up papers in Scholar, use "cited by" to find related papers
-
-*** Thesis
-Type-II/III firmware, specifically non-Linux.
-Need a crawler and an analysis.
-Calculate different metrics: security pitfalls, code contructs, etc.

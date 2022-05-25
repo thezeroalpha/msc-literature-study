@@ -1,4 +1,8 @@
 {
   "references.bib": {"type": "bibliography"},
-  "main.tex": {"type": "main"}
+  "../analysis/exports/references.bib": {"type": "bibliography"},
+  "litstudy.tex": {"type": "main"},
+  ".projections.json": {"type": "projection"},
+  "*": {"path": ["sections/", "../analysis/exports/numbers/", "../analysis/exports/tables/", "../analysis/papers/"]}
+
 }

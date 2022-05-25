@@ -1,0 +1,33 @@
+% vim: spell spelllang=en_us
+\section{Discussion}\label{s:discussion}
+We have provided an overview of past studies on the topic of firmware research, particularly focusing on NLB firmware.
+In this section, we will comment on the significance of these findings, and what they mean for further research in this domain.
+
+Historically, there has been much more research focused on LB firmware than on NLB firmware, which means that a comprehensive review of LB firmware research is not feasible in the scope of this study,
+Thus, from the outset, we must lean more towards searching for literature discussing NLB firmware, so our corpus is limited regarding LB firmware research, making it more difficult to draw comparisons between the two.
+However, even with the goal of specifically looking for NLB firmware research, we found many articles discussing only LB firmware, as summarized in \autoref{sec:only LB firmware}.
+This shows the prevalence of research focusing on LB firmware, and supports our conclusions that it would be beneficial to expand research in NLB firmware.
+
+For studies including NLB firmware, the dataset is frequently available.
+However, this could be improved, as for 8 out of 20 studies, the dataset was not available; this hinders the reproducibility of the results.
+Furthermore, the missing datasets add up to \num{6035} samples, which, were they to be made available, could be used in further research.
+
+In existing studies, there is a bias in the datasets towards IoT firmware, perhaps because this type of firmware is easiest to scrape, as vendors make it available for retrieval from their servers.
+NLB research is more varied, probably because the IoT space has a majority of LB firmware; still, both of the large-scale NLB studies included in this paper contain IoT firmware.
+Therefore, NLB firmware retrieval at a large scale remains a challenge, particularly if the aim is to analyze firmware from multiple non-IoT sectors.
+
+Furthermore, there is a bias towards ARM architectures in the datasets.
+The majority of embedded devices use the ARM architecture, so including ARM firmware is almost unavoidable with a large-scale study; however, all large-scale NLB studies analyze only ARM firmware \cite{gritti2022heapster,wen2020firmxray}.
+Yet, there is a sizable portion of devices that use other architectures, and limiting focus to only one architecture leads to the development of techniques specific to that architecture, leaving out other devices.
+Thus, there is also potential for research in analysis focused on non-ARM firmware, particularly at a large scale.
+
+With NLB firmware, the biggest problem is the lack of standards, so one cannot know for certain the architecture or base address of a given sample.
+This results in obstacles preventing even basic static analysis of code.
+\citen{FirmXRay}{wen2020firmxray} solved the problem of architecture detection by using firmware from specific vendors, which has a known architecture, and \citen{HEAPSTER}{gritti2022heapster} re-used \textsc{FirmXRay}'s dataset, adding 5 samples from a single vendor with a known architecture.
+For base address detection, \textsc{FirmXRay} developed a technique that worked for their dataset, and \textsc{HEAPSTER} applied the same technique.
+However, this technique is not generic: it relies on domain knowledge, namely vendor-specific functions in the firmware.
+The approach used by \citea{zhu2017methodology} is more widely applicable, as it only relies on the presence of a sufficient amount of strings in the binary.
+Their method for finding string addresses uses ARM-specific byte sequence representations of \texttt{ldr} instructions, but instructions with the same function also exist in other architectures, so this part of the algorithm can easily be adapted by changing the target byte sequences in FIND-LDR.
+Nevertheless, the efficacy of this technique depends on the amount of ASCII strings in the binary, and how the compiler stores them, as one of the authors' assumptions is that strings used in adjacent code will be stored in a contiguous block of memory; this may not be true for all compilers or for hand-crafted assembly code.
+In general, past studies used firmware where the architecture was known before analysis, but in a large-scale study with a varied dataset, firmware will often not be known.
+Hence, another possible direction for further research is the development of techniques and processes that can analyze unknown firmware in a generic manner.

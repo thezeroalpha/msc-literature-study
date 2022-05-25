@@ -1,0 +1,69 @@
+% vim: spell spelllang=en_us
+\section{Methodology}\label{sec:methodology}
+To make sense of the research landscape in the area of firmware analysis and identify potentially interesting areas for further research, we must be able to make quantitative observations about existing research.
+To achieve this, we opt for a classification-based approach, where we categorize previous research across several variables.
+
+\subsection{Previous classification efforts}\label{ssec:previous classification efforts}
+There are several ways to classify firmware.
+\citea{muench2018what} provide one option: they separate embedded systems by the type of operating system that they use.
+This yields three classes: Type-I (general purpose operating systems), Type-II (custom operating systems designed specifically for embedded devices), and Type-III (no operating system abstraction).
+Using this framework, we could categorize research based on the types of embedded systems for which the analyzed firmware is intended.
+However, we often found it difficult to distinguish which of the embedded system types were being discussed purely based on information in the research paper, particularly when trying to determine whether a system was Type-II or Type-III.
+
+As another option, \citea{costin2014large} separate firmware by operating system (e.g., Linux, VxWorks, Windows CE).
+However, because a large amount of research involving firmware that does not use Linux includes samples without an operating system, this classification would not capture information for a significant amount of our data.
+
+\subsection{Our categorization}\label{ssec:our categorization}
+First, we separate studies by size: those considered large-scale, and those considered small-scale.
+There is no established definition of a \qq{large-scale} study; in this paper, for simplicity, we consider a large-scale study one that treats more than \result{const-large-scale-thresh} samples.
+This amount of samples is sufficient to guarantee for variety in the dataset (as smaller datasets may be biased towards specific vendors/devices), and multiple studies have shown that their analysis can scale up to and beyond this point.
+
+The classification approaches discussed in \autoref{ssec:previous classification efforts} were developed to classify firmware.
+Since our goal is not to classify firmware itself, but instead to classify research works dealing with firmware, those classification systems do not fit our purpose.
+Hence, we developed our own classification, across several variables: firmware types, analysis types, scraping approaches, device types, instruction set architecture, whether and where the dataset is available, and what parts of the firmware were analyzed.
+We can split these variables into categorical data and numerical data.
+Categorical data, except for dataset availability, are multi-valued variables; i.e., the values for each variable are not mutually exclusive.
+Numerical data captures information about the number of samples that were initially retrieved, and how many were actually used in analysis (after any preliminary filtering).
+
+\subsubsection{Linux-based versus Non-Linux-based firmware}
+We split the firmware (and hence research of firmware) into two types: Linux-based (\newterm{LB}), and non-Linux-based (\newterm{NLB}).
+LB firmware is designed to execute on top of an operating system that is based on the Linux kernel~\cite{linuxkernel}.
+NLB firmware either executes on top of a different operating system (e.g., VxWorks), or has no OS abstraction whatsoever.
+A study can be labeled as both LB and NLB if it analyzes both types of firmware.
+
+\subsubsection{Analysis types}
+The \q{analysis types} category captures the style of analysis that the research in question conducted.
+It indicates whether the authors performed static analysis, dynamic analysis, symbolic execution, or a combination of the three.
+It also shows whether the study included taint tracking.
+
+\subsubsection{Analysis focus}
+We also tracked the parts of firmware that the papers analyzed.
+Some research analyzed the actual code of the firmware; some only the configuration or credentials stored in the firmware.
+Other papers analyzed the interfaces of the firmware -- that is, they interacted with the methods that the firmware uses to communicate with the \q{outside world} (e.g., web interfaces, ports, protocols).
+
+\subsubsection{Obtaining firmware}
+The \q{scraping approaches} category contains the methods that the authors of a particular source used to retrieve firmware samples.
+This could mean downloading them from vendors' websites or FTP servers, using an app-based approach, using a custom search engine (such as the one offered by Google,\footnote{\url{https://programmablesearchengine.google.com/about/}} extracting them directly from the devices, compiling them from source code, or allowing users to submit firmware for analysis.
+Some studies reused existing datasets from previous research, and some did not specify the methods they used.
+
+\subsubsection{Device types: sectors}
+We opted to separate the analyzed devices by sector, i.e., in which area those devices are commonly used.
+The \q{personal} sector contains devices that a single person would use and would carry with them (e.g., wearable, phone, tablet, smart eyeglasses).
+The \q{IoT} sector includes internet-connected devices that a person would place in their home or on their belongings (e.g., wireless tag, printer, switch, routers and access points, network-attached storage).
+The \q{computer peripherals} sector contains components of computers, or devices intended to be used with a computer (e.g., device drivers, bootloaders, batteries, storage devices, network interface cards, mice, and keyboards).
+The \q{industrial} sector includes devices used for manufacturing or control in industry (e.g., agricultural equipment, reflow oven, heat press, industrial control system devices such as programmable logic controllers).
+Finally, there is a \q{medical} sector for devices used in medical contexts (e.g., a blood pressure monitor), and an \q{other} sector for devices that do not fit in the other categories (e.g., drone, card reader, development boards, gateway device, single board computer).
+
+\subsubsection{CPU information}
+We also keep track of the instruction set architectures (\newterm{ISA}s) of the CPUs for which the analyzed firmware is intended.
+The only coalescing we did in this category was grouping versions of ARM (e.g., ARMv7-Thumb, ARMv8A) under the same \q{ARM} label.
+If a paper did not explicitly state the architecture, we researched the specific processors of the devices that the authors used, and noted their architectures.
+
+\subsubsection{Reproducibility: availability of data}
+We verified whether the dataset that the authors used is (still) available.
+The data can be made available in several states.
+It is ideal when the authors of a study directly provide their dataset, because then the version of data is guaranteed to be the same as when the authors used it.
+However, this is not always the case in practice.
+If the authors used a dataset compiled in previous research, they may only link to that dataset.
+It could also be that the authors only release a part of the dataset.
+Unfortunately, in some cases, the firmware samples they used may not be available at all.

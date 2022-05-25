@@ -1,0 +1,10 @@
+[doc]
+name = 'default'  # the document name
+bundle = 'https://data1.fullyjustified.net/tlextras-2021.3r1.tar'
+
+[[output]]  # one or more output specifications
+name = 'main' # the output's name
+type = "pdf"  # the output's type
+preamble = ""
+index = "thesis.tex" # optional, defaults to "index.tex": the index file to use (within `src`)
+postamble = ""
